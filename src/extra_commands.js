@@ -4,6 +4,66 @@ const { query, one, many } = require('./db');
 const config = require('./config');
 const logs = require('./logs');
 
+function buildHelpEmbed(prefix) {
+  const p = prefix;
+  return new EmbedBuilder()
+    .setTitle('Member Farm — Command Panel')
+    .setColor(0x5865f2)
+    .setDescription('Current prefix: `' + p + '` — change with `' + p + 'prefix set <prefix>`')
+    .addFields(
+      { name: 'Core', value: [
+        '`' + p + 'auth` — auth counts',
+        '`' + p + 'stock` — current stock',
+        '`' + p + 'restock <n>` — restock tokens',
+        '`' + p + 'remove <n>` — remove from stock',
+        '`' + p + 'link` / `' + p + 'link define <url>`',
+        '`' + p + 'verify` — OAuth verify button',
+        '`' + p + 'bot` — add-bot invite button',
+        '`' + p + 'join <serverID>` — request members',
+        '`' + p + 'channel set #channel` — join channel',
+        '`' + p + 'checkauth` — scan auth pool',
+      ].join('\n') },
+      { name: 'Permissions', value: [
+        '`' + p + 'grant @user <cmd|all>`',
+        '`' + p + 'grant revoke @user <cmd|all>`',
+        '`' + p + 'permission @user`',
+      ].join('\n'), inline: true },
+      { name: 'Queue', value: [
+        '`' + p + 'queue` · clear',
+        '`' + p + 'queue remove|info|priority <id>`',
+        '`' + p + 'queue move <id> <pos>`',
+        '`' + p + 'queue pause` · resume',
+      ].join('\n'), inline: true },
+      { name: 'Server', value: [
+        '`' + p + 'checkserver <id>`',
+        '`' + p + 'blacklist <id> <reason>`',
+        '`' + p + 'blacklist list` / revoke',
+        '`' + p + 'leave <id|all>`',
+        '`' + p + 'antileave add|revoke|list`',
+        '`' + p + 'announce <id|all> <msg>`',
+      ].join('\n'), inline: true },
+      { name: 'Config', value: [
+        '`' + p + 'prefix set <prefix>`',
+        '`' + p + 'basesend set <n>`',
+        '`' + p + 'send @role <n>`',
+        '`' + p + 'verifyrole set @role`',
+        '`' + p + 'cooldown <seconds>`',
+      ].join('\n'), inline: true },
+      { name: 'Logs', value: [
+        '`' + p + 'logfarm|logserver|logerrors|logadmin`',
+        'enable · disable · set #ch',
+        '`' + p + 'logs status`',
+      ].join('\n'), inline: true },
+      { name: 'Admin', value: [
+        '`' + p + 'stats` · `' + p + 'profile @user`',
+        '`' + p + 'maintenance enable|disable`',
+        '`' + p + 'token` — owner only',
+      ].join('\n'), inline: true }
+    )
+    .setFooter({ text: 'Member Farm · prefix ' + p })
+    .setTimestamp();
+}
+
 function confirmRow(id) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`confirm_${id}`).setLabel('Confirm').setStyle(ButtonStyle.Danger),
@@ -75,7 +135,7 @@ async function handleExtra(cmd, message, args, client, perms) {
   if (cmd === 'leave') {
     if (!(await perms.canUse(message.author.id, 'leave')) && !perms.isOwner(message.author.id)) return true;
     const target = (args[0] || '').toLowerCase();
-    if (!target) { await message.reply('Usage: `!leave <serverID>` or `!leave all`'); return true; }
+    if (!target) { await message.reply('Usage: leave <serverID> or leave all'); return true; }
 
     if (target === 'all') {
       const id = 'leaveall_' + Date.now();
@@ -92,7 +152,7 @@ async function handleExtra(cmd, message, args, client, perms) {
       return true;
     }
 
-    if (!/^\d{17,20}$/.test(target)) { await message.reply('Usage: `!leave <serverID>` or `!leave all`'); return true; }
+    if (!/^\d{17,20}$/.test(target)) { await message.reply('Usage: leave <serverID> or leave all'); return true; }
     const main = config.MAIN_GUILD_ID || '1499704751481294878';
     if (target === String(main)) {
       await message.reply({ embeds: [new EmbedBuilder().setTitle('Protected').setDescription('Cannot leave the main server.').setColor(0xed4245).setFooter({ text: 'Member Farm' }).setTimestamp()] });
@@ -123,7 +183,7 @@ async function handleExtra(cmd, message, args, client, perms) {
     const sub = (args[0] || '').toLowerCase();
     if (sub === 'add') {
       const gid = args[1];
-      if (!gid || !/^\d{17,20}$/.test(gid)) { await message.reply('Usage: `!antileave add <serverID>`'); return true; }
+      if (!gid || !/^\d{17,20}$/.test(gid)) { await message.reply('Usage: antileave add <serverID>'); return true; }
       await query('INSERT INTO antileave (guild_id, added_by) VALUES ($1, $2) ON CONFLICT (guild_id) DO NOTHING', [gid, message.author.id]);
       await message.reply({ embeds: [new EmbedBuilder().setTitle('Antileave Added').setColor(0x57f287).addFields(
         { name: 'Server ID', value: '`' + gid + '`', inline: true },
@@ -131,7 +191,7 @@ async function handleExtra(cmd, message, args, client, perms) {
       ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
     } else if (sub === 'revoke') {
       const gid = args[1];
-      if (!gid || !/^\d{17,20}$/.test(gid)) { await message.reply('Usage: `!antileave revoke <serverID>`'); return true; }
+      if (!gid || !/^\d{17,20}$/.test(gid)) { await message.reply('Usage: antileave revoke <serverID>'); return true; }
       await query('DELETE FROM antileave WHERE guild_id = $1', [gid]);
       await message.reply({ embeds: [new EmbedBuilder().setTitle('Antileave Revoked').setColor(0xfaa61a).addFields(
         { name: 'Server ID', value: '`' + gid + '`', inline: true },
@@ -143,7 +203,7 @@ async function handleExtra(cmd, message, args, client, perms) {
       const lines = ['`' + main + '` — **main** (always protected)'].concat(rows.map(r => '`' + r.guild_id + '`'));
       await message.reply({ embeds: [new EmbedBuilder().setTitle('Antileave List').setColor(0x5865f2).setDescription(lines.join('\n')).setFooter({ text: 'Member Farm' }).setTimestamp()] });
     } else {
-      await message.reply('Usage: `!antileave add|revoke|list <serverID>`');
+      await message.reply('Usage: antileave add|revoke|list <serverID>');
     }
     return true;
   }
@@ -151,4 +211,4 @@ async function handleExtra(cmd, message, args, client, perms) {
   return false;
 }
 
-module.exports = { handleExtra };
+module.exports = { handleExtra, buildHelpEmbed };
