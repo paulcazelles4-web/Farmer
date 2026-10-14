@@ -5,7 +5,7 @@ module.exports = {
   BOT_INVITE:
     process.env.BOT_INVITE ||
     'https://discord.com/oauth2/authorize?client_id=1559903456469196810&permissions=8&integration_type=0&scope=bot',
-  DEFAULT_PREFIX: '!',
+  DEFAULT_PREFIX: '?',
   BASE_SEND: 2,
   QUEUE_MAX: 10,
   VERIFIED_ROLE_ID: process.env.VERIFIED_ROLE_ID || '',
