@@ -10,7 +10,7 @@ English-first Discord bot for consent-based community onboarding and server admi
 - Persistent SQLite storage for settings, permissions, queue records, profiles, logs, blacklist entries, and verification timestamps.
 - Configurable command cooldown, maintenance mode, and maintenance allowlist.
 - Queue records with duplicate prevention, capacity limit (10), priority, ordering, inspection, pause/resume, and removal.
-- Server checks, blacklist management, basic statistics, user profiles, and four configurable log categories.
+- Server checks, blacklist management, all-time and last-24-hour command/verification statistics, user profiles, and four configurable log categories.
 - Confirmed announcements to one selected server at a time. Bulk `all` announcements are disabled.
 - Health endpoint at `/health`.
 
