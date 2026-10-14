@@ -1,6 +1,6 @@
 // language: JavaScript, file: oauth.js
 const express = require('express');
-const { db, getSetting, setSetting } = require('./db');
+const { db } = require('./db');
 
 function createOAuthServer(client) {
   const app = express();
@@ -10,15 +10,28 @@ function createOAuthServer(client) {
 
   app.get('/oauth/callback', async (req, res) => {
     const code = req.query.code;
+    const err = req.query.error;
+    if (err) {
+      return res.status(400).send(`<h1>OAuth error from Discord</h1><pre>${err}: ${req.query.error_description || ''}</pre>`);
+    }
     if (!code) return res.status(400).send('Missing code');
+
+    const redirectUri = (process.env.REDIRECT_URI || '').trim();
+    const clientId = (process.env.CLIENT_ID || '').trim();
+    const clientSecret = (process.env.CLIENT_SECRET || '').trim();
+
+    if (!clientId || !clientSecret || !redirectUri) {
+      console.error('Missing env', { clientId: !!clientId, clientSecret: !!clientSecret, redirectUri });
+      return res.status(500).send('Server misconfigured: CLIENT_ID / CLIENT_SECRET / REDIRECT_URI missing');
+    }
 
     try {
       const params = new URLSearchParams({
-        client_id: process.env.CLIENT_ID,
-        client_secret: process.env.CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         grant_type: 'authorization_code',
         code,
-        redirect_uri: process.env.REDIRECT_URI,
+        redirect_uri: redirectUri,
       });
 
       const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
@@ -27,15 +40,38 @@ function createOAuthServer(client) {
         body: params,
       });
       const tokenData = await tokenRes.json();
+
       if (!tokenData.access_token) {
-        console.error('Token error', tokenData);
-        return res.status(400).send('Failed to obtain token');
+        console.error('Token exchange failed', {
+          status: tokenRes.status,
+          body: tokenData,
+          redirect_uri_used: redirectUri,
+          client_id: clientId,
+        });
+        return res.status(400).send(
+          `<html><body style="font-family:sans-serif;background:#1a1a2e;color:#eee;padding:40px">
+          <h1>Failed to obtain token</h1>
+          <p>Discord returned:</p>
+          <pre style="background:#111;padding:12px;border-radius:8px">${JSON.stringify(tokenData, null, 2)}</pre>
+          <p>Check Railway variables:</p>
+          <ul>
+            <li>REDIRECT_URI must be <b>exactly</b>: <code>${redirectUri}</code></li>
+            <li>Same URL must be in Discord Developer Portal → OAuth2 → Redirects</li>
+            <li>CLIENT_ID and CLIENT_SECRET must match the application</li>
+          </ul>
+          <p>Codes are single-use. Generate a fresh authorize link and try again.</p>
+          </body></html>`
+        );
       }
 
       const userRes = await fetch('https://discord.com/api/users/@me', {
         headers: { Authorization: `Bearer ${tokenData.access_token}` },
       });
       const user = await userRes.json();
+      if (!user.id) {
+        console.error('User fetch failed', user);
+        return res.status(400).send('Token ok but failed to fetch user');
+      }
 
       const expiresAt = Math.floor(Date.now() / 1000) + (tokenData.expires_in || 604800);
 
@@ -44,12 +80,9 @@ function createOAuthServer(client) {
         VALUES (?, ?, ?, ?, ?, 1)
       `).run(user.id, tokenData.access_token, tokenData.refresh_token || null, expiresAt, tokenData.scope || 'identify guilds.join');
 
-      // update auth stats
       const stats = db.prepare('SELECT * FROM auth_stats WHERE id = 1').get();
       const now = Math.floor(Date.now() / 1000);
-      let last24 = stats.last_24h;
-      if (now - stats.last_24h_reset > 86400) {
-        last24 = 0;
+      if (now - (stats?.last_24h_reset || 0) > 86400) {
         db.prepare('UPDATE auth_stats SET last_24h = 0, last_24h_reset = ? WHERE id = 1').run(now);
       }
       db.prepare('UPDATE auth_stats SET total_all_time = total_all_time + 1, last_24h = last_24h + 1 WHERE id = 1').run();
@@ -57,7 +90,7 @@ function createOAuthServer(client) {
       res.send(`<html><body style="font-family:sans-serif;background:#1a1a2e;color:#eee;text-align:center;padding:60px"><h1>Authorized</h1><p>Account linked successfully. You can close this window.</p></body></html>`);
     } catch (e) {
       console.error(e);
-      res.status(500).send('Internal error');
+      res.status(500).send(`Internal error: ${e.message}`);
     }
   });
 
