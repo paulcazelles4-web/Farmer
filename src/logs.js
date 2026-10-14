@@ -3,9 +3,9 @@ const { EmbedBuilder } = require('discord.js');
 const { getSetting } = require('./db');
 
 async function sendLog(client, type, embed) {
-  const enabled = getSetting(`log_${type}_enabled`, '0') === '1';
+  const enabled = (await getSetting(`log_${type}_enabled`, '0')) === '1';
   if (!enabled) return;
-  const channelId = getSetting(`log_${type}_channel`);
+  const channelId = await getSetting(`log_${type}_channel`);
   if (!channelId) return;
   try {
     const ch = await client.channels.fetch(channelId).catch(() => null);

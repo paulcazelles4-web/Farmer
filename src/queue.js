@@ -1,74 +1,78 @@
 // language: JavaScript, file: queue.js
-const { db } = require('./db');
+const { query, one, many } = require('./db');
 const config = require('./config');
 const { joinGuild } = require('./oauth');
 
-function getQueue() {
-  return db.prepare('SELECT * FROM queue WHERE status = ? ORDER BY priority DESC, position ASC, id ASC').all('pending');
+async function getQueue() {
+  return many(`SELECT * FROM queue WHERE status = 'pending' ORDER BY priority DESC, position ASC, id ASC`);
 }
 
-function addToQueue(guildId, requesterId, amount) {
-  const count = db.prepare('SELECT COUNT(*) as c FROM queue WHERE status = ?').get('pending').c;
-  if (count >= config.QUEUE_MAX) return { ok: false, reason: 'queue_full' };
-  const pos = count + 1;
-  const info = db.prepare('INSERT INTO queue (guild_id, requester_id, amount, position) VALUES (?, ?, ?, ?)').run(guildId, requesterId, amount, pos);
-  return { ok: true, id: info.lastInsertRowid, position: pos };
+async function addToQueue(guildId, requesterId, amount) {
+  const row = await one(`SELECT COUNT(*)::int AS c FROM queue WHERE status = 'pending'`);
+  if (row.c >= config.QUEUE_MAX) return { ok: false, reason: 'queue_full' };
+  const pos = row.c + 1;
+  const info = await one(
+    `INSERT INTO queue (guild_id, requester_id, amount, position) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [guildId, requesterId, amount, pos]
+  );
+  return { ok: true, id: info.id, position: pos };
 }
 
-function clearQueue() {
-  db.prepare('UPDATE queue SET status = ? WHERE status = ?').run('cleared', 'pending');
+async function clearQueue() {
+  await query(`UPDATE queue SET status = 'cleared' WHERE status = 'pending'`);
 }
 
-function removeFromQueue(guildId) {
-  db.prepare('UPDATE queue SET status = ? WHERE guild_id = ? AND status = ?').run('removed', guildId, 'pending');
-  reindex();
+async function removeFromQueue(guildId) {
+  await query(`UPDATE queue SET status = 'removed' WHERE guild_id = $1 AND status = 'pending'`, [guildId]);
+  await reindex();
 }
 
-function reindex() {
-  const rows = getQueue();
-  const upd = db.prepare('UPDATE queue SET position = ? WHERE id = ?');
-  rows.forEach((r, i) => upd.run(i + 1, r.id));
+async function reindex() {
+  const rows = await getQueue();
+  for (let i = 0; i < rows.length; i++) {
+    await query('UPDATE queue SET position = $1 WHERE id = $2', [i + 1, rows[i].id]);
+  }
 }
 
-function setPriority(guildId) {
-  db.prepare('UPDATE queue SET priority = 1 WHERE guild_id = ? AND status = ?').run(guildId, 'pending');
-  reindex();
+async function setPriority(guildId) {
+  await query(`UPDATE queue SET priority = 1 WHERE guild_id = $1 AND status = 'pending'`, [guildId]);
+  await reindex();
 }
 
-function moveQueue(guildId, newPos) {
-  const rows = getQueue();
+async function moveQueue(guildId, newPos) {
+  const rows = await getQueue();
   const target = rows.find(r => r.guild_id === guildId);
   if (!target) return false;
   const filtered = rows.filter(r => r.guild_id !== guildId);
   filtered.splice(Math.max(0, newPos - 1), 0, target);
-  const upd = db.prepare('UPDATE queue SET position = ? WHERE id = ?');
-  filtered.forEach((r, i) => upd.run(i + 1, r.id));
+  for (let i = 0; i < filtered.length; i++) {
+    await query('UPDATE queue SET position = $1 WHERE id = $2', [i + 1, filtered[i].id]);
+  }
   return true;
 }
 
-function pauseQueue() {
-  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('queue_paused', '1');
+async function pauseQueue() {
+  await query(`INSERT INTO settings (key, value) VALUES ('queue_paused', '1') ON CONFLICT (key) DO UPDATE SET value = '1'`);
 }
-function resumeQueue() {
-  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('queue_paused', '0');
+async function resumeQueue() {
+  await query(`INSERT INTO settings (key, value) VALUES ('queue_paused', '0') ON CONFLICT (key) DO UPDATE SET value = '0'`);
 }
-function isPaused() {
-  return db.prepare('SELECT value FROM settings WHERE key = ?').get('queue_paused')?.value === '1';
+async function isPaused() {
+  const row = await one(`SELECT value FROM settings WHERE key = 'queue_paused'`);
+  return row?.value === '1';
 }
 
 async function processOne(client) {
-  if (isPaused()) return;
-  const item = db.prepare('SELECT * FROM queue WHERE status = ? ORDER BY priority DESC, position ASC LIMIT 1').get('pending');
+  if (await isPaused()) return;
+  const item = await one(`SELECT * FROM queue WHERE status = 'pending' ORDER BY priority DESC, position ASC LIMIT 1`);
   if (!item) return;
 
-  const stock = db.prepare(
-    'SELECT s.token_id, t.access_token, t.user_id FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
-  ).all();
-
+  const stock = await many(
+    `SELECT s.token_id, t.access_token, t.user_id FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1`
+  );
   if (!stock.length) {
-    console.log('queue: no stock for', item.guild_id);
-    db.prepare('UPDATE queue SET status = ? WHERE id = ?').run('failed_nostock', item.id);
-    reindex();
+    await query(`UPDATE queue SET status = 'failed_nostock' WHERE id = $1`, [item.id]);
+    await reindex();
     return;
   }
 
@@ -76,24 +80,22 @@ async function processOne(client) {
   for (const s of stock) {
     if (sent >= item.amount) break;
     try {
-      // skip if already in guild (bot cache)
       const guild = client.guilds.cache.get(item.guild_id);
       if (guild) {
         const existing = await guild.members.fetch(s.user_id).catch(() => null);
         if (existing) {
-          console.log(`skip already in guild user=${s.user_id}`);
-          db.prepare('DELETE FROM stock WHERE token_id = ?').run(s.token_id);
+          await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
           continue;
         }
       }
-
       const ok = await joinGuild(s.access_token, item.guild_id, s.user_id);
       if (ok) {
         sent++;
-        db.prepare('INSERT INTO joins (guild_id, token_id, requester_id, success) VALUES (?, ?, ?, 1)').run(
-          item.guild_id, s.token_id, item.requester_id
+        await query(
+          `INSERT INTO joins (guild_id, token_id, requester_id, success) VALUES ($1, $2, $3, 1)`,
+          [item.guild_id, s.token_id, item.requester_id]
         );
-        db.prepare('DELETE FROM stock WHERE token_id = ?').run(s.token_id);
+        await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
         console.log(`joined user=${s.user_id} -> guild=${item.guild_id}`);
       }
     } catch (e) {
@@ -102,12 +104,13 @@ async function processOne(client) {
   }
 
   const status = sent > 0 ? 'done' : 'failed';
-  db.prepare('UPDATE queue SET status = ? WHERE id = ?').run(status, item.id);
-  db.prepare(
-    `UPDATE profiles SET members_received = members_received + ?, last_command_at = strftime('%s','now') WHERE user_id = ?`
-  ).run(sent, item.requester_id);
-  console.log(`queue item ${item.id} guild=${item.guild_id} sent=${sent}/${item.amount} status=${status}`);
-  reindex();
+  await query('UPDATE queue SET status = $1 WHERE id = $2', [status, item.id]);
+  await query(
+    `UPDATE profiles SET members_received = members_received + $1, last_command_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE user_id = $2`,
+    [sent, item.requester_id]
+  );
+  console.log(`queue item ${item.id} sent=${sent}/${item.amount} status=${status}`);
+  await reindex();
 }
 
 module.exports = {
