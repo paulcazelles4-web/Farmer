@@ -1,11 +1,12 @@
 // language: JavaScript, file: index.js
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
-const { init } = require('./db');
+const { init, one, many } = require('./db');
 const { createOAuthServer } = require('./oauth');
 const { handleCommand } = require('./commands');
 const logs = require('./logs');
 const queue = require('./queue');
+const config = require('./config');
 
 if (!process.env.BOT_TOKEN) {
   console.error('BOT_TOKEN missing');
@@ -28,6 +29,13 @@ const client = new Client({
 
 client.pendingConfirms = new Map();
 client.tokenPages = new Map();
+
+async function isAntiLeave(guildId) {
+  const main = config.MAIN_GUILD_ID || '1499704751481294878';
+  if (String(guildId) === String(main)) return true;
+  const row = await one('SELECT 1 FROM antileave WHERE guild_id = $1', [String(guildId)]);
+  return !!row;
+}
 
 (async () => {
   await init();
@@ -70,10 +78,38 @@ client.tokenPages = new Map();
         await interaction.update({ content: 'Queue cleared.', components: [] });
         logs.adminLog(client, 'Queue cleared', `By <@${interaction.user.id}>`);
       } else if (pending.action === 'leave') {
+        if (await isAntiLeave(pending.guildId)) {
+          return interaction.update({ content: `Protected (antileave / main server): cannot leave \`${pending.guildId}\`.`, components: [] });
+        }
         const g = client.guilds.cache.get(pending.guildId);
         if (g) await g.leave();
-        await interaction.update({ content: `Left ${pending.guildId}`, components: [] });
+        await interaction.update({ content: `Left \`${pending.guildId}\`.`, components: [] });
         logs.adminLog(client, 'Server leave', pending.guildId);
+      } else if (pending.action === 'leave_all') {
+        const protectedIds = new Set(
+          (await many('SELECT guild_id FROM antileave')).map(r => r.guild_id)
+        );
+        const main = config.MAIN_GUILD_ID || '1499704751481294878';
+        protectedIds.add(String(main));
+        let left = 0;
+        let skipped = 0;
+        for (const g of [...client.guilds.cache.values()]) {
+          if (protectedIds.has(String(g.id))) {
+            skipped++;
+            continue;
+          }
+          try {
+            await g.leave();
+            left++;
+          } catch (e) {
+            console.error('leave fail', g.id, e.message);
+          }
+        }
+        await interaction.update({
+          content: `Left **${left}** servers. Skipped **${skipped}** protected (antileave / main).`,
+          components: [],
+        });
+        logs.adminLog(client, 'Leave all', `By <@${interaction.user.id}> left=${left} skipped=${skipped}`);
       } else if (pending.action === 'announce_all') {
         let ok = 0;
         for (const g of client.guilds.cache.values()) {
