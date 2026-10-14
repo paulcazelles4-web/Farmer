@@ -55,13 +55,8 @@ function createOAuthServer(client) {
           <h1>Failed to obtain token</h1>
           <p>Discord returned:</p>
           <pre style="background:#111;padding:12px;border-radius:8px">${JSON.stringify(tokenData, null, 2)}</pre>
-          <p>Check Railway variables:</p>
-          <ul>
-            <li>REDIRECT_URI must be <b>exactly</b>: <code>${redirectUri}</code></li>
-            <li>Same URL must be in Discord Developer Portal → OAuth2 → Redirects</li>
-            <li>CLIENT_ID and CLIENT_SECRET must match the application</li>
-          </ul>
-          <p>Codes are single-use. Generate a fresh authorize link and try again.</p>
+          <p>Check Railway variables REDIRECT_URI / CLIENT_ID / CLIENT_SECRET.</p>
+          <p>Codes are single-use.</p>
           </body></html>`
         );
       }
@@ -96,15 +91,22 @@ function createOAuthServer(client) {
     }
   });
 
-  // Railway requires 0.0.0.0
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`OAuth server listening on 0.0.0.0:${PORT}`);
   });
   return app;
 }
 
-async function joinGuild(accessToken, guildId) {
-  const res = await fetch(`https://discord.com/api/guilds/${guildId}/members/@me`, {
+/**
+ * Add OAuth user to guild via Bot + user access_token (guilds.join).
+ * Correct endpoint: PUT /guilds/{guild.id}/members/{user.id}
+ */
+async function joinGuild(accessToken, guildId, userId) {
+  if (!userId) {
+    console.error('joinGuild missing userId');
+    return false;
+  }
+  const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${userId}`, {
     method: 'PUT',
     headers: {
       Authorization: `Bot ${process.env.BOT_TOKEN}`,
@@ -112,7 +114,13 @@ async function joinGuild(accessToken, guildId) {
     },
     body: JSON.stringify({ access_token: accessToken }),
   });
-  return res.status === 201 || res.status === 204;
+
+  if (res.status === 201 || res.status === 204) return true;
+
+  let body = '';
+  try { body = await res.text(); } catch {}
+  console.error(`joinGuild fail guild=${guildId} user=${userId} status=${res.status} body=${body}`);
+  return false;
 }
 
 module.exports = { createOAuthServer, joinGuild };
