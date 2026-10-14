@@ -1,12 +1,10 @@
 // language: JavaScript, file: index.js, target: Node 20+, discord.js 14
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Events, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
 const { createOAuthServer } = require('./oauth');
 const { handleCommand } = require('./commands');
-const { db, setSetting, getSetting } = require('./db');
 const logs = require('./logs');
 const queue = require('./queue');
-const config = require('./config');
 
 if (!process.env.BOT_TOKEN) {
   console.error('BOT_TOKEN missing');
@@ -26,11 +24,11 @@ const client = new Client({
 client.pendingConfirms = new Map();
 client.tokenPages = new Map();
 
+// Start HTTP immediately so Railway proxy gets a listener on PORT
+createOAuthServer(client);
+
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client.user.tag}`);
-  createOAuthServer(client);
-
-  // queue processor every 30s
   setInterval(() => {
     queue.processOne(client).catch(e => console.error('queue process', e));
   }, 30000);
@@ -51,7 +49,6 @@ client.on(Events.MessageCreate, async (message) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
 
-  // confirm / decline
   if (interaction.customId.startsWith('confirm_') || interaction.customId.startsWith('decline_')) {
     const id = interaction.customId.replace(/^(confirm_|decline_)/, '');
     const pending = client.pendingConfirms.get(id);
@@ -62,7 +59,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.customId.startsWith('decline_')) {
       return interaction.update({ content: 'Cancelled.', components: [] });
     }
-    // confirm actions
     if (pending.action === 'queue_clear') {
       queue.clearQueue();
       await interaction.update({ content: 'Queue cleared.', components: [] });
@@ -86,7 +82,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // token pagination
   if (interaction.customId === 'token_prev' || interaction.customId === 'token_next') {
     const data = client.tokenPages.get(interaction.message.id);
     if (!data || data.owner !== interaction.user.id) {
@@ -98,4 +93,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-client.login(process.env.BOT_TOKEN);
+client.login(process.env.BOT_TOKEN).catch(err => {
+  console.error('Discord login failed', err);
+});
