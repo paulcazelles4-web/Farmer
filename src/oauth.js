@@ -4,9 +4,11 @@ const { db } = require('./db');
 
 function createOAuthServer(client) {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.get('/', (req, res) => res.send('Member Farm OAuth server online.'));
+
+  app.get('/health', (req, res) => res.json({ ok: true, bot: client?.user?.tag || 'starting' }));
 
   app.get('/oauth/callback', async (req, res) => {
     const code = req.query.code;
@@ -94,7 +96,10 @@ function createOAuthServer(client) {
     }
   });
 
-  app.listen(PORT, () => console.log(`OAuth server on :${PORT}`));
+  // Railway requires 0.0.0.0
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`OAuth server listening on 0.0.0.0:${PORT}`);
+  });
   return app;
 }
 
