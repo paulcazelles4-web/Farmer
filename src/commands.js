@@ -48,7 +48,7 @@ async function handleCommand(message, client) {
         if (args[0] === 'set' && args[1]) {
           if (!perms.canUse(message.author.id, 'prefix') && !perms.isOwner(message.author.id)) return;
           setSetting('prefix', args[1]);
-          await message.reply(`Prefix set to \`${args[1]}\`);
+          await message.reply(`Prefix set to \`${args[1]}\``);
           logs.adminLog(client, 'Prefix changed', `By <@${message.author.id}> → \`${args[1]}\``);
         }
         break;
