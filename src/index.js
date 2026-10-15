@@ -8,6 +8,7 @@ const logs = require('./logs');
 const queue = require('./queue');
 const apply = require('./apply');
 const config = require('./config');
+const perms = require('./permissions');
 
 if (!process.env.BOT_TOKEN) {
   console.error('BOT_TOKEN missing');
@@ -55,10 +56,7 @@ async function isAntiLeave(guildId) {
     let inviterId = null;
     let inviterTag = null;
     try {
-      const logsAudit = await guild.fetchAuditLogs({
-        type: 28,
-        limit: 5,
-      }).catch(() => null);
+      const logsAudit = await guild.fetchAuditLogs({ type: 28, limit: 5 }).catch(() => null);
       const entry = logsAudit?.entries?.find(
         e => e.target?.id === client.user.id && Date.now() - e.createdTimestamp < 15000
       );
@@ -105,6 +103,20 @@ async function isAntiLeave(guildId) {
       if (await apply.handleApplyMessage(message, client)) return;
     } catch (e) {
       console.error('apply message', e.message);
+    }
+    try {
+      const prefix = (await getSetting('prefix', config.DEFAULT_PREFIX)) || config.DEFAULT_PREFIX;
+      if (message.content.startsWith(prefix)) {
+        const rest = message.content.slice(prefix.length).trim();
+        const cmd0 = (rest.split(/\s+/)[0] || '').toLowerCase();
+        if (cmd0 === 'apply') {
+          const args = rest.split(/\s+/).slice(1);
+          await apply.handleApplyCommand(message, args, client, perms);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error('apply cmd', e.message);
     }
     await handleCommand(message, client);
   });
@@ -180,8 +192,7 @@ async function isAntiLeave(guildId) {
         );
         const main = config.MAIN_GUILD_ID || '1499704751481294878';
         protectedIds.add(String(main));
-        let left = 0;
-        let skipped = 0;
+        let left = 0, skipped = 0;
         for (const g of [...client.guilds.cache.values()]) {
           if (protectedIds.has(String(g.id))) { skipped++; continue; }
           try { await g.leave(); left++; } catch (e) { console.error('leave fail', g.id, e.message); }
