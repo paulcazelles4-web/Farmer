@@ -149,7 +149,6 @@ async function handleExtra(cmd, message, args, client, perms) {
       } catch {
         await message.reply({ content: 'Could not DM you — sending here (delete after download).', files: [file] });
       }
-      logs.adminLog(client, 'Token export', 'By <@' + message.author.id + '> count=' + tokens.length);
       return true;
     }
     if (sub === 'import') {
@@ -305,7 +304,8 @@ async function handleExtra(cmd, message, args, client, perms) {
   if (cmd === 'status') {
     const uptimeMs = client.uptime || 0;
     const h = Math.floor(uptimeMs / 3600000);
-    const m = Math.floor((uptimeMs % 3600000) / 60000);
+    const m = Math.floor((uptimeMs % 60000) / 1000);
+    const m2 = Math.floor((uptimeMs % 3600000) / 60000);
     const s = Math.floor((uptimeMs % 60000) / 1000);
     const stock = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'))?.c || 0;
     const tokens = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c || 0;
@@ -317,7 +317,7 @@ async function handleExtra(cmd, message, args, client, perms) {
     const health = await getSetting('last_checkauth_health', '—');
     const lastCheckStr = lastCheck ? '<t:' + Math.floor(Number(lastCheck) / 1000) + ':R>' : '`never`';
     await message.reply({ embeds: [new EmbedBuilder().setTitle('Bot Status').setColor(paused || triggered ? 0xed4245 : 0x57f287).addFields(
-      { name: 'Uptime', value: '`' + h + 'h ' + m + 'm ' + s + 's`', inline: true },
+      { name: 'Uptime', value: '`' + h + 'h ' + m2 + 'm ' + s + 's`', inline: true },
       { name: 'Ping', value: '`' + Math.round(client.ws.ping) + 'ms`', inline: true },
       { name: 'Guilds', value: '`' + client.guilds.cache.size + '`', inline: true },
       { name: 'Valid Auths', value: '`' + tokens + '`', inline: true },
@@ -329,7 +329,7 @@ async function handleExtra(cmd, message, args, client, perms) {
     return true;
   }
 
-  if (cmd === 'logtest') {
+  if (cmd === 'logtest' || ((cmd === 'log' || cmd === 'logs') && (args[0] || '').toLowerCase() === 'test')) {
     if (!(await perms.canUse(message.author.id, 'logs')) && !perms.isOwner(message.author.id)) return true;
     const types = [
       { key: 'farm', title: 'Farm Log Test', color: 0x57f287, desc: 'This is a **farm** log test message.' },
