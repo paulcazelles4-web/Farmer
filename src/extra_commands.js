@@ -4,36 +4,7 @@ const { query, one, many, getSetting, setSetting } = require('./db');
 const config = require('./config');
 const logs = require('./logs');
 const queue = require('./queue');
-
-function buildHelpEmbed(prefix) {
-  const p = prefix;
-  return new EmbedBuilder()
-    .setTitle('Member Farm — Command Panel')
-    .setColor(0x5865f2)
-    .setDescription('Current prefix: `' + p + '` — change with `' + p + 'prefix set <prefix>`')
-    .addFields(
-      { name: 'Core', value: [
-        '`' + p + 'auth` · `' + p + 'stock` · `' + p + 'restock <n>`',
-        '`' + p + 'checkauth` · `' + p + 'status` · `' + p + 'panel`',
-        '`' + p + 'verify` · `' + p + 'bot` · `' + p + 'join <id>`',
-        '`' + p + 'channel set #ch`',
-      ].join('\n') },
-      { name: 'Server / Abuse', value: [
-        '`' + p + 'leave <id|all>` · `' + p + 'antileave`',
-        '`' + p + 'blacklist` · `' + p + 'banfarm @user`',
-        '`' + p + 'antiraid enable|disable|status`',
-        '`' + p + 'invites` · `' + p + 'announce`',
-      ].join('\n'), inline: true },
-      { name: 'Admin', value: [
-        '`' + p + 'token` · export · import',
-        '`' + p + 'bio <text>`',
-        '`' + p + 'stats` · `' + p + 'profile`',
-        '`' + p + 'maintenance` · `' + p + 'grant`',
-      ].join('\n'), inline: true }
-    )
-    .setFooter({ text: 'Member Farm · prefix ' + p })
-    .setTimestamp();
-}
+const { buildHelpEmbed } = require('./help');
 
 function confirmRow(id) {
   return new ActionRowBuilder().addComponents(
@@ -43,7 +14,6 @@ function confirmRow(id) {
 }
 
 async function handleExtra(cmd, message, args, client, perms) {
-  // ── checkauth (existing) ──
   if (cmd === 'checkauth') {
     if (!(await perms.canUse(message.author.id, 'checkauth')) && !perms.isOwner(message.author.id)) return true;
     const statusMsg = await message.reply({ embeds: [new EmbedBuilder()
@@ -92,7 +62,6 @@ async function handleExtra(cmd, message, args, client, perms) {
     return true;
   }
 
-  // ── leave / antileave (existing) ──
   if (cmd === 'leave') {
     if (!(await perms.canUse(message.author.id, 'leave')) && !perms.isOwner(message.author.id)) return true;
     const target = (args[0] || '').toLowerCase();
@@ -162,28 +131,18 @@ async function handleExtra(cmd, message, args, client, perms) {
     return true;
   }
 
-  // ── token export / import ──
   if (cmd === 'token') {
     if (String(message.author.id) !== String(config.OWNER_ID)) return true;
     const sub = (args[0] || '').toLowerCase();
-
     if (sub === 'export') {
       const tokens = await many('SELECT id, user_id, access_token, refresh_token, expires_at, scope, added_at, valid FROM tokens ORDER BY id');
-      if (!tokens.length) {
-        await message.reply('No tokens to export.');
-        return true;
-      }
+      if (!tokens.length) { await message.reply('No tokens to export.'); return true; }
       const payload = {
         exported_at: new Date().toISOString(),
         count: tokens.length,
         tokens: tokens.map(t => ({
-          user_id: t.user_id,
-          access_token: t.access_token,
-          refresh_token: t.refresh_token,
-          expires_at: t.expires_at,
-          scope: t.scope,
-          added_at: t.added_at,
-          valid: t.valid,
+          user_id: t.user_id, access_token: t.access_token, refresh_token: t.refresh_token,
+          expires_at: t.expires_at, scope: t.scope, added_at: t.added_at, valid: t.valid,
         })),
       };
       const buf = Buffer.from(JSON.stringify(payload, null, 2), 'utf8');
@@ -197,13 +156,11 @@ async function handleExtra(cmd, message, args, client, perms) {
       logs.adminLog(client, 'Token export', 'By <@' + message.author.id + '> count=' + tokens.length);
       return true;
     }
-
     if (sub === 'import') {
       let jsonText = null;
       if (message.attachments.size > 0) {
-        const att = message.attachments.first();
         try {
-          const res = await fetch(att.url);
+          const res = await fetch(message.attachments.first().url);
           jsonText = await res.text();
         } catch (e) {
           await message.reply('Failed to download attachment: ' + e.message);
@@ -214,7 +171,7 @@ async function handleExtra(cmd, message, args, client, perms) {
         if (rest.startsWith('{') || rest.startsWith('[')) jsonText = rest;
       }
       if (!jsonText) {
-        await message.reply('Usage: token import — attach a JSON export file, or paste JSON after the command.');
+        await message.reply('Usage: token import — attach a JSON export file, or paste JSON.');
         return true;
       }
       let data;
@@ -223,10 +180,7 @@ async function handleExtra(cmd, message, args, client, perms) {
         return true;
       }
       const list = Array.isArray(data) ? data : (data.tokens || []);
-      if (!list.length) {
-        await message.reply('No tokens found in payload.');
-        return true;
-      }
+      if (!list.length) { await message.reply('No tokens found in payload.'); return true; }
       let added = 0, skipped = 0;
       for (const t of list) {
         if (!t.access_token || !t.user_id) { skipped++; continue; }
@@ -238,14 +192,7 @@ async function handleExtra(cmd, message, args, client, perms) {
         await query(
           `INSERT INTO tokens (user_id, access_token, refresh_token, expires_at, scope, valid)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [
-            String(t.user_id),
-            t.access_token,
-            t.refresh_token || null,
-            t.expires_at || null,
-            t.scope || 'identify guilds.join',
-            t.valid === 0 ? 0 : 1,
-          ]
+          [String(t.user_id), t.access_token, t.refresh_token || null, t.expires_at || null, t.scope || 'identify guilds.join', t.valid === 0 ? 0 : 1]
         );
         added++;
       }
@@ -253,55 +200,34 @@ async function handleExtra(cmd, message, args, client, perms) {
         { name: 'Added', value: '`' + added + '`', inline: true },
         { name: 'Skipped', value: '`' + skipped + '`', inline: true }
       ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
-      logs.adminLog(client, 'Token import', 'By <@' + message.author.id + '> added=' + added + ' skipped=' + skipped);
+      logs.adminLog(client, 'Token import', 'By <@' + message.author.id + '> added=' + added);
       return true;
     }
-
-    // plain ?token still handled in commands.js for paginated list
     return false;
   }
 
-  // ── bio ──
   if (cmd === 'bio') {
     if (!perms.isOwner(message.author.id) && !(await perms.canUse(message.author.id, 'bio'))) return true;
     const text = args.join(' ').trim();
-    if (!text) {
-      await message.reply('Usage: bio <status text>  (or `bio clear`)');
-      return true;
-    }
+    if (!text) { await message.reply('Usage: bio <status text>  (or `bio clear`)'); return true; }
     if (text.toLowerCase() === 'clear') {
       await client.user.setPresence({ activities: [], status: 'online' });
       await message.reply({ embeds: [new EmbedBuilder().setTitle('Bio Cleared').setColor(0x5865f2).setFooter({ text: 'Member Farm' }).setTimestamp()] });
       return true;
     }
-    await client.user.setPresence({
-      activities: [{ name: text.slice(0, 128), type: 4 }], // Custom status
-      status: 'online',
-    });
-    // Discord custom type 4 may need different API — fallback to Watching
-    try {
-      await client.user.setActivity(text.slice(0, 128), { type: 3 }); // Watching
-    } catch {}
+    try { await client.user.setActivity(text.slice(0, 128), { type: 3 }); } catch {}
     await message.reply({ embeds: [new EmbedBuilder().setTitle('Bio Updated').setColor(0x57f287)
-      .setDescription('`' + text.slice(0, 128) + '`')
-      .setFooter({ text: 'Member Farm' }).setTimestamp()] });
+      .setDescription('`' + text.slice(0, 128) + '`').setFooter({ text: 'Member Farm' }).setTimestamp()] });
     logs.adminLog(client, 'Bio changed', 'By <@' + message.author.id + '>');
     return true;
   }
 
-  // ── banfarm ──
   if (cmd === 'banfarm') {
     if (!(await perms.canUse(message.author.id, 'banfarm')) && !perms.isOwner(message.author.id)) return true;
     const user = message.mentions.users.first() || (args[0] && /^\d{17,20}$/.test(args[0]) ? { id: args[0] } : null);
-    if (!user) {
-      await message.reply('Usage: banfarm @user [reason]');
-      return true;
-    }
-    if (String(user.id) === String(config.OWNER_ID)) {
-      await message.reply('Cannot banfarm the owner.');
-      return true;
-    }
-    const reason = args.slice(message.mentions.users.first() ? 1 : 1).join(' ') || 'No reason provided';
+    if (!user) { await message.reply('Usage: banfarm @user [reason]'); return true; }
+    if (String(user.id) === String(config.OWNER_ID)) { await message.reply('Cannot banfarm the owner.'); return true; }
+    const reason = args.slice(1).join(' ') || 'No reason provided';
     await query(
       `INSERT INTO user_blacklist (user_id, reason, added_by) VALUES ($1, $2, $3)
        ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason, added_by = EXCLUDED.added_by`,
@@ -314,22 +240,18 @@ async function handleExtra(cmd, message, args, client, perms) {
       { name: 'User ID', value: '`' + user.id + '`', inline: true },
       { name: 'Reason', value: reason },
       { name: 'Action by', value: '<@' + message.author.id + '>', inline: true }
-    ).setDescription('Grants revoked · queue entries cleared · blacklisted from farm commands.')
+    ).setDescription('Grants revoked · queue cleared · blacklisted.')
       .setFooter({ text: 'Member Farm' }).setTimestamp()] });
     logs.adminLog(client, 'Banfarm', '<@' + user.id + '> by <@' + message.author.id + '> — ' + reason, 0xed4245);
     return true;
   }
 
-  // ── invites tracker ──
   if (cmd === 'invites') {
     if (!(await perms.canUse(message.author.id, 'invites')) && !perms.isOwner(message.author.id)) return true;
     const sub = (args[0] || 'list').toLowerCase();
     if (sub === 'list' || !sub) {
       const rows = await many('SELECT * FROM bot_invites ORDER BY created_at DESC LIMIT 25');
-      if (!rows.length) {
-        await message.reply('No invite records yet.');
-        return true;
-      }
+      if (!rows.length) { await message.reply('No invite records yet.'); return true; }
       const lines = rows.map(r =>
         '`'+r.guild_id+'` **'+(r.guild_name||'?')+'** — by ' + (r.inviter_id ? '<@'+r.inviter_id+'>' : '`unknown`') + ' · ' + (r.member_count??'?') + ' members'
       );
@@ -351,7 +273,6 @@ async function handleExtra(cmd, message, args, client, perms) {
     return true;
   }
 
-  // ── antiraid ──
   if (cmd === 'antiraid') {
     if (!(await perms.canUse(message.author.id, 'antiraid')) && !perms.isOwner(message.author.id)) return true;
     const sub = (args[0] || 'status').toLowerCase();
@@ -383,7 +304,6 @@ async function handleExtra(cmd, message, args, client, perms) {
       await message.reply('AntiRaid counters cleared and queue resumed.');
       return true;
     }
-    // status
     const enabled = (await getSetting('antiraid_enabled', '0')) === '1';
     const threshold = await getSetting('antiraid_threshold', '8');
     const triggered = (await getSetting('antiraid_triggered', '0')) === '1';
@@ -401,7 +321,6 @@ async function handleExtra(cmd, message, args, client, perms) {
     return true;
   }
 
-  // ── panel ──
   if (cmd === 'panel') {
     if (!(await perms.canUse(message.author.id, 'panel')) && !perms.isOwner(message.author.id)) return true;
     const oauthUrl = await getSetting('oauth_link',
@@ -430,7 +349,6 @@ async function handleExtra(cmd, message, args, client, perms) {
     return true;
   }
 
-  // ── status ──
   if (cmd === 'status') {
     const uptimeMs = client.uptime || 0;
     const h = Math.floor(uptimeMs / 3600000);
