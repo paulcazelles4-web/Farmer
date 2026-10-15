@@ -4,14 +4,17 @@ const { getSetting } = require('./db');
 
 async function sendLog(client, type, embed) {
   const enabled = (await getSetting(`log_${type}_enabled`, '0')) === '1';
-  if (!enabled) return;
+  if (!enabled) return { ok: false, reason: 'disabled' };
   const channelId = await getSetting(`log_${type}_channel`);
-  if (!channelId) return;
+  if (!channelId) return { ok: false, reason: 'no_channel' };
   try {
     const ch = await client.channels.fetch(channelId).catch(() => null);
-    if (ch) await ch.send({ embeds: [embed] });
+    if (!ch) return { ok: false, reason: 'channel_not_found' };
+    await ch.send({ embeds: [embed] });
+    return { ok: true, channelId };
   } catch (e) {
     console.error('Log send failed', type, e.message);
+    return { ok: false, reason: 'send_failed', error: e.message };
   }
 }
 
@@ -23,7 +26,6 @@ function farmLog(client, title, desc, color = 0x57f287) {
   );
 }
 
-/** GrowBase-style join result panel */
 function djoinLog(client, data) {
   const {
     userTag,
@@ -89,12 +91,55 @@ function botAddedLog(client, data) {
   return sendLog(client, 'server', emb);
 }
 
-function errorLog(client, title, desc) {
-  return sendLog(
-    client,
-    'errors',
-    new EmbedBuilder().setTitle(title).setDescription(desc).setColor(0xed4245).setFooter({ text: 'Member Farm' }).setTimestamp()
-  );
+/**
+ * GrowBase-style unhandled error panel
+ * @param {object} opts
+ * @param {string} [opts.botName]
+ * @param {string} [opts.command]
+ * @param {string} [opts.userTag]
+ * @param {string} [opts.userId]
+ * @param {string} [opts.channelName]
+ * @param {string} [opts.guildName]
+ * @param {string} [opts.errorType]
+ * @param {string} [opts.errorMessage]
+ * @param {string} [opts.traceback]
+ */
+function errorLog(client, opts = {}) {
+  // backward compat: errorLog(client, title, desc)
+  if (typeof opts === 'string') {
+    const title = opts;
+    const desc = arguments[2] || '';
+    opts = { errorType: title, errorMessage: desc, traceback: desc };
+  }
+
+  const botName = opts.botName || client?.user?.username || 'Member Farm';
+  const command = opts.command || 'unknown';
+  const userTag = opts.userTag || 'unknown';
+  const userId = opts.userId || '—';
+  const channelName = opts.channelName || 'unknown';
+  const guildName = opts.guildName || 'unknown';
+  const errorType = opts.errorType || 'Error';
+  const errorMessage = opts.errorMessage || 'No message';
+  let traceback = opts.traceback || errorMessage;
+  if (traceback.length > 900) traceback = traceback.slice(0, 900) + '\n…';
+
+  const emb = new EmbedBuilder()
+    .setTitle('Unhandled Bot Error')
+    .setColor(0xed4245)
+    .addFields(
+      { name: 'Bot', value: botName, inline: true },
+      { name: 'Command', value: '`' + command + '`', inline: true },
+      { name: 'User', value: userTag + '\n(`' + userId + '`)', inline: true },
+      { name: 'Channel', value: '#' + channelName + ' in ' + guildName, inline: true },
+      { name: 'Error Type', value: errorType, inline: true },
+      { name: '\u200b', value: '\u200b', inline: true },
+      { name: 'Error Message', value: '```\n' + String(errorMessage).slice(0, 500) + '\n```' },
+      { name: 'Traceback', value: '```js\n' + traceback + '\n```' }
+    )
+    .setFooter({ text: 'Member Farm' })
+    .setTimestamp();
+
+  return sendLog(client, 'errors', emb);
 }
 
 function adminLog(client, title, desc, color = 0xfaa61a) {
