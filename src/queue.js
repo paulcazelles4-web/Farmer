@@ -1,7 +1,8 @@
 // language: JavaScript, file: queue.js
-const { query, one, many } = require('./db');
+const { query, one, many, getSetting, setSetting } = require('./db');
 const config = require('./config');
 const { joinGuild } = require('./oauth');
+const logs = require('./logs');
 
 async function getQueue() {
   return many(`SELECT * FROM queue WHERE status = 'pending' ORDER BY priority DESC, position ASC, id ASC`);
@@ -24,6 +25,11 @@ async function clearQueue() {
 
 async function removeFromQueue(guildId) {
   await query(`UPDATE queue SET status = 'removed' WHERE guild_id = $1 AND status = 'pending'`, [guildId]);
+  await reindex();
+}
+
+async function clearUserQueue(userId) {
+  await query(`UPDATE queue SET status = 'banfarm' WHERE requester_id = $1 AND status = 'pending'`, [String(userId)]);
   await reindex();
 }
 
@@ -52,14 +58,32 @@ async function moveQueue(guildId, newPos) {
 }
 
 async function pauseQueue() {
-  await query(`INSERT INTO settings (key, value) VALUES ('queue_paused', '1') ON CONFLICT (key) DO UPDATE SET value = '1'`);
+  await setSetting('queue_paused', '1');
 }
 async function resumeQueue() {
-  await query(`INSERT INTO settings (key, value) VALUES ('queue_paused', '0') ON CONFLICT (key) DO UPDATE SET value = '0'`);
+  await setSetting('queue_paused', '0');
 }
 async function isPaused() {
-  const row = await one(`SELECT value FROM settings WHERE key = 'queue_paused'`);
-  return row?.value === '1';
+  return (await getSetting('queue_paused', '0')) === '1';
+}
+
+async function bumpRateLimit() {
+  const now = Date.now();
+  const windowMs = 5 * 60 * 1000;
+  let raw = await getSetting('antiraid_hits', '[]');
+  let hits = [];
+  try { hits = JSON.parse(raw); } catch { hits = []; }
+  hits = hits.filter(t => now - t < windowMs);
+  hits.push(now);
+  await setSetting('antiraid_hits', JSON.stringify(hits));
+  const enabled = (await getSetting('antiraid_enabled', '0')) === '1';
+  const threshold = parseInt(await getSetting('antiraid_threshold', '8'), 10) || 8;
+  if (enabled && hits.length >= threshold) {
+    await pauseQueue();
+    await setSetting('antiraid_triggered', '1');
+    return true;
+  }
+  return false;
 }
 
 async function processOne(client) {
@@ -76,44 +100,105 @@ async function processOne(client) {
     return;
   }
 
-  let sent = 0;
+  let joined = 0, alreadyIn = 0, maxed = 0, phoneLocked = 0, deauthorized = 0;
+  let terminated = 0, banned = 0, transient = 0;
+
   for (const s of stock) {
-    if (sent >= item.amount) break;
+    if (joined >= item.amount) break;
     try {
       const guild = client.guilds.cache.get(item.guild_id);
       if (guild) {
         const existing = await guild.members.fetch(s.user_id).catch(() => null);
         if (existing) {
+          alreadyIn++;
           await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
+          await query(
+            `INSERT INTO joins (guild_id, token_id, requester_id, success, detail) VALUES ($1, $2, $3, 0, 'already')`,
+            [item.guild_id, s.token_id, item.requester_id]
+          );
           continue;
         }
       }
-      const ok = await joinGuild(s.access_token, item.guild_id, s.user_id);
-      if (ok) {
-        sent++;
+      const result = await joinGuild(s.access_token, item.guild_id, s.user_id);
+      if (result.ok) {
+        joined++;
         await query(
-          `INSERT INTO joins (guild_id, token_id, requester_id, success) VALUES ($1, $2, $3, 1)`,
+          `INSERT INTO joins (guild_id, token_id, requester_id, success, detail) VALUES ($1, $2, $3, 1, 'joined')`,
           [item.guild_id, s.token_id, item.requester_id]
         );
         await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
         console.log(`joined user=${s.user_id} -> guild=${item.guild_id}`);
+      } else {
+        const code = result.code;
+        if (code === 'rate_limit') {
+          transient++;
+          const triggered = await bumpRateLimit();
+          if (triggered && client) {
+            logs.adminLog(client, 'AntiRaid Triggered', 'Queue paused after repeated 429s.');
+          }
+          break; // stop this item, try later
+        } else if (code === 'deauth') {
+          deauthorized++;
+          await query('UPDATE tokens SET valid = 0 WHERE id = $1', [s.token_id]);
+          await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
+        } else if (code === 'maxed') {
+          maxed++;
+          await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
+        } else if (code === 'phone') {
+          phoneLocked++;
+          await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
+        } else if (code === 'banned') {
+          banned++;
+          await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
+        } else {
+          transient++;
+        }
+        await query(
+          `INSERT INTO joins (guild_id, token_id, requester_id, success, detail) VALUES ($1, $2, $3, 0, $4)`,
+          [item.guild_id, s.token_id, item.requester_id, code]
+        );
       }
+      await new Promise(r => setTimeout(r, 400));
     } catch (e) {
+      transient++;
       console.error('join fail', e.message);
     }
   }
 
-  const status = sent > 0 ? 'done' : 'failed';
+  const stockLeft = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1')).c;
+  const status = joined > 0 ? 'done' : 'failed';
   await query('UPDATE queue SET status = $1 WHERE id = $2', [status, item.id]);
   await query(
     `UPDATE profiles SET members_received = members_received + $1, last_command_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE user_id = $2`,
-    [sent, item.requester_id]
+    [joined, item.requester_id]
   );
-  console.log(`queue item ${item.id} sent=${sent}/${item.amount} status=${status}`);
+
+  try {
+    const user = await client.users.fetch(item.requester_id).catch(() => null);
+    logs.djoinLog(client, {
+      userTag: user?.tag || item.requester_id,
+      userId: item.requester_id,
+      guildId: item.guild_id,
+      joined,
+      alreadyIn,
+      maxed,
+      phoneLocked,
+      deauthorized,
+      terminated,
+      banned,
+      transient,
+      stockLeft,
+      tier: `x${item.amount}`,
+    });
+  } catch (e) {
+    console.error('djoin log', e.message);
+  }
+
+  console.log(`queue item ${item.id} joined=${joined}/${item.amount} status=${status}`);
   await reindex();
 }
 
 module.exports = {
-  getQueue, addToQueue, clearQueue, removeFromQueue,
+  getQueue, addToQueue, clearQueue, removeFromQueue, clearUserQueue,
   setPriority, moveQueue, pauseQueue, resumeQueue, isPaused, processOne, reindex,
 };
