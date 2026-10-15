@@ -23,6 +23,7 @@ function buildHelpEmbed(prefix, color = 0x5865f2) {
           '`' + p + 'checkauth` — scan auth pool',
           '`' + p + 'status` — bot status',
           '`' + p + 'panel` — persistent panel',
+          '`' + p + 'apply` — restocker application',
         ].join('\n'),
       },
       {
@@ -88,6 +89,7 @@ function buildHelpEmbed(prefix, color = 0x5865f2) {
           '`' + p + 'antiraid enable|disable|status`',
           '`' + p + 'antiraid threshold <n>` · clear',
           '`' + p + 'token` · export · import',
+          '`' + p + 'apply list|accept|deny`',
         ].join('\n'),
         inline: true,
       }
