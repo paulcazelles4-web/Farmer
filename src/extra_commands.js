@@ -7,6 +7,7 @@ const queue = require('./queue');
 const { buildHelpEmbed } = require('./help');
 const { handleColor } = require('./color_cmd');
 const { getEmbedColor } = require('./embed_util');
+const { handleApplyCommand } = require('./apply');
 
 function confirmRow(id) {
   return new ActionRowBuilder().addComponents(
@@ -17,6 +18,7 @@ function confirmRow(id) {
 
 async function handleExtra(cmd, message, args, client, perms) {
   if (cmd === 'color') return handleColor(message, args, client, perms);
+  if (cmd === 'apply') return handleApplyCommand(message, args, client, perms);
 
   if (cmd === 'checkauth') {
     if (!(await perms.canUse(message.author.id, 'checkauth')) && !perms.isOwner(message.author.id)) return true;
@@ -336,27 +338,22 @@ async function handleExtra(cmd, message, args, client, perms) {
   if (cmd === 'logtest' || ((cmd === 'log' || cmd === 'logs') && (args[0] || '').toLowerCase() === 'test')) {
     if (!(await perms.canUse(message.author.id, 'logs')) && !perms.isOwner(message.author.id)) return true;
     const results = [];
-
     const farmRes = await logs.djoinLog(client, {
-      userTag: message.author.tag,
-      userId: message.author.id,
+      userTag: message.author.tag, userId: message.author.id,
       guildId: message.guild?.id || '000000000000000000',
       joined: 2, alreadyIn: 1, maxed: 0, phoneLocked: 0, deauthorized: 0,
       terminated: 0, banned: 0, transient: 0, stockLeft: 42, tier: 'x2 (simulated)',
     });
     results.push({ name: 'farm', value: farmRes?.ok ? '<#' + farmRes.channelId + '> · **OK**' : '`' + (farmRes?.reason || 'fail') + '`', inline: true });
-
     const serverRes = await logs.botAddedLog(client, {
       name: message.guild?.name || 'Simulated Server',
       id: message.guild?.id || '000000000000000000',
       memberCount: message.guild?.memberCount || 100,
-      inviterId: message.author.id,
-      inviterTag: message.author.tag,
+      inviterId: message.author.id, inviterTag: message.author.tag,
       botGuilds: client.guilds.cache.size,
       icon: message.guild?.iconURL?.({ size: 128 }) || null,
     });
     results.push({ name: 'server', value: serverRes?.ok ? '<#' + serverRes.channelId + '> · **OK**' : '`' + (serverRes?.reason || 'fail') + '`', inline: true });
-
     const fakeTrace = [
       'Error: Used disallowed intents',
       '    at WebSocketShard.onClose (/app/node_modules/@discordjs/ws/dist/index.js:1151:18)',
@@ -367,8 +364,7 @@ async function handleExtra(cmd, message, args, client, perms) {
     const errRes = await logs.errorLog(client, {
       botName: client.user?.username || 'Member Farm',
       command: 'log test',
-      userTag: message.author.tag,
-      userId: message.author.id,
+      userTag: message.author.tag, userId: message.author.id,
       channelName: message.channel?.name || 'unknown',
       guildName: message.guild?.name || 'unknown',
       errorType: 'Forbidden',
@@ -376,17 +372,12 @@ async function handleExtra(cmd, message, args, client, perms) {
       traceback: fakeTrace,
     });
     results.push({ name: 'errors', value: errRes?.ok ? '<#' + errRes.channelId + '> · **OK**' : '`' + (errRes?.reason || 'fail') + '`', inline: true });
-
     const adminRes = await logs.adminLog(client, 'Log Test', 'Simulated admin action by <@' + message.author.id + '>');
     results.push({ name: 'admin', value: adminRes?.ok ? '<#' + adminRes.channelId + '> · **OK**' : '`' + (adminRes?.reason || 'fail') + '`', inline: true });
-
     await message.reply({ embeds: [new EmbedBuilder()
-      .setTitle('Log Test Results')
-      .setColor(0x5865f2)
+      .setTitle('Log Test Results').setColor(0x5865f2)
       .setDescription('Simulated real log events through the logging pipeline.')
-      .addFields(results)
-      .setFooter({ text: 'Member Farm' })
-      .setTimestamp()] });
+      .addFields(results).setFooter({ text: 'Member Farm' }).setTimestamp()] });
     return true;
   }
 
