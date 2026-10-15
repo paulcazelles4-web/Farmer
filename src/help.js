@@ -1,11 +1,11 @@
 // language: JavaScript, file: help.js
 const { EmbedBuilder } = require('discord.js');
 
-function buildHelpEmbed(prefix) {
+function buildHelpEmbed(prefix, color = 0x5865f2) {
   const p = prefix;
   return new EmbedBuilder()
     .setTitle('Member Farm — Command Panel')
-    .setColor(0x5865f2)
+    .setColor(color)
     .setDescription('Current prefix: `' + p + '` — change with `' + p + 'prefix set <prefix>`')
     .addFields(
       {
@@ -66,6 +66,7 @@ function buildHelpEmbed(prefix) {
           '`' + p + 'verifyrole set @role`',
           '`' + p + 'cooldown <seconds>`',
           '`' + p + 'bio <text>` · clear',
+          '`' + p + 'color <#hex>` · reset',
         ].join('\n'),
         inline: true,
       },
