@@ -122,6 +122,12 @@ async function isAntiLeave(guildId) {
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
+    try {
+      if (interaction.isModalSubmit() && (await apply.handleApplyModal(interaction, client))) return;
+    } catch (e) {
+      console.error('apply modal', e.message);
+    }
+
     if (!interaction.isButton()) return;
 
     try {
