@@ -40,8 +40,14 @@ async function handleCommand(message, client) {
     return message.reply('Bot is currently under maintenance.');
   }
 
-  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join'];
+  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status'];
   if (!publicCmds.includes(cmd) && !(await perms.canUse(message.author.id, cmd)) && !perms.isOwner(message.author.id)) return;
+
+  // token export/import before switch (owner-only, handled in extra)
+  if (cmd === 'token' && args[0] && ['export', 'import'].includes(String(args[0]).toLowerCase())) {
+    await handleExtra('token', message, args, client, perms);
+    return;
+  }
 
   try {
     switch (cmd) {
