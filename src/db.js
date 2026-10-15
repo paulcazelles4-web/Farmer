@@ -60,10 +60,25 @@ CREATE TABLE IF NOT EXISTS blacklist (
   added_by TEXT,
   added_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
 );
+CREATE TABLE IF NOT EXISTS user_blacklist (
+  user_id TEXT PRIMARY KEY,
+  reason TEXT,
+  added_by TEXT,
+  added_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
+);
 CREATE TABLE IF NOT EXISTS antileave (
   guild_id TEXT PRIMARY KEY,
   added_by TEXT,
   added_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
+);
+CREATE TABLE IF NOT EXISTS bot_invites (
+  id SERIAL PRIMARY KEY,
+  guild_id TEXT NOT NULL,
+  guild_name TEXT,
+  inviter_id TEXT,
+  inviter_tag TEXT,
+  member_count INTEGER,
+  created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
 );
 CREATE TABLE IF NOT EXISTS queue (
   id SERIAL PRIMARY KEY,
@@ -81,6 +96,7 @@ CREATE TABLE IF NOT EXISTS joins (
   token_id INTEGER,
   requester_id TEXT,
   success INTEGER,
+  detail TEXT,
   created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
 );
 CREATE TABLE IF NOT EXISTS profiles (
@@ -106,6 +122,8 @@ CREATE TABLE IF NOT EXISTS auth_stats (
 INSERT INTO auth_stats (id, total_all_time, last_24h) VALUES (1, 0, 0)
 ON CONFLICT (id) DO NOTHING;
 `);
+  // ensure joins.detail column exists on older DBs
+  await query(`ALTER TABLE joins ADD COLUMN IF NOT EXISTS detail TEXT`).catch(() => {});
   console.log('Postgres schema ready');
 }
 
