@@ -74,8 +74,12 @@ function createOAuthServer(client) {
   return app;
 }
 
+/**
+ * @returns {{ ok: boolean, code: string, status: number, body: string }}
+ * code: joined | already | rate_limit | deauth | banned | maxed | phone | error
+ */
 async function joinGuild(accessToken, guildId, userId) {
-  if (!userId) return false;
+  if (!userId) return { ok: false, code: 'error', status: 0, body: 'no userId' };
   const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}/members/${userId}`, {
     method: 'PUT',
     headers: {
@@ -84,11 +88,26 @@ async function joinGuild(accessToken, guildId, userId) {
     },
     body: JSON.stringify({ access_token: accessToken }),
   });
-  if (res.status === 201 || res.status === 204) return true;
   let body = '';
   try { body = await res.text(); } catch {}
+
+  if (res.status === 201 || res.status === 204) {
+    return { ok: true, code: 'joined', status: res.status, body };
+  }
+  if (res.status === 429) return { ok: false, code: 'rate_limit', status: 429, body };
+  if (res.status === 401 || res.status === 403) {
+    const lower = body.toLowerCase();
+    if (lower.includes('banned') || lower.includes('ban')) return { ok: false, code: 'banned', status: res.status, body };
+    return { ok: false, code: 'deauth', status: res.status, body };
+  }
+  if (res.status === 400) {
+    const lower = body.toLowerCase();
+    if (lower.includes('max') || lower.includes('100 guilds')) return { ok: false, code: 'maxed', status: 400, body };
+    if (lower.includes('phone') || lower.includes('verified')) return { ok: false, code: 'phone', status: 400, body };
+    return { ok: false, code: 'error', status: 400, body };
+  }
   console.error(`joinGuild fail guild=${guildId} user=${userId} status=${res.status} body=${body}`);
-  return false;
+  return { ok: false, code: 'error', status: res.status, body };
 }
 
 module.exports = { createOAuthServer, joinGuild };
