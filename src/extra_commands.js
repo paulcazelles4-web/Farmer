@@ -138,12 +138,8 @@ async function handleExtra(cmd, message, args, client, perms) {
       const tokens = await many('SELECT id, user_id, access_token, refresh_token, expires_at, scope, added_at, valid FROM tokens ORDER BY id');
       if (!tokens.length) { await message.reply('No tokens to export.'); return true; }
       const payload = {
-        exported_at: new Date().toISOString(),
-        count: tokens.length,
-        tokens: tokens.map(t => ({
-          user_id: t.user_id, access_token: t.access_token, refresh_token: t.refresh_token,
-          expires_at: t.expires_at, scope: t.scope, added_at: t.added_at, valid: t.valid,
-        })),
+        exported_at: new Date().toISOString(), count: tokens.length,
+        tokens: tokens.map(t => ({ user_id: t.user_id, access_token: t.access_token, refresh_token: t.refresh_token, expires_at: t.expires_at, scope: t.scope, added_at: t.added_at, valid: t.valid })),
       };
       const buf = Buffer.from(JSON.stringify(payload, null, 2), 'utf8');
       const file = new AttachmentBuilder(buf, { name: 'tokens-export-' + Date.now() + '.json' });
@@ -159,48 +155,29 @@ async function handleExtra(cmd, message, args, client, perms) {
     if (sub === 'import') {
       let jsonText = null;
       if (message.attachments.size > 0) {
-        try {
-          const res = await fetch(message.attachments.first().url);
-          jsonText = await res.text();
-        } catch (e) {
-          await message.reply('Failed to download attachment: ' + e.message);
-          return true;
-        }
+        try { jsonText = await (await fetch(message.attachments.first().url)).text(); }
+        catch (e) { await message.reply('Failed to download: ' + e.message); return true; }
       } else {
         const rest = args.slice(1).join(' ');
         if (rest.startsWith('{') || rest.startsWith('[')) jsonText = rest;
       }
-      if (!jsonText) {
-        await message.reply('Usage: token import — attach a JSON export file, or paste JSON.');
-        return true;
-      }
+      if (!jsonText) { await message.reply('Usage: token import — attach JSON or paste it.'); return true; }
       let data;
-      try { data = JSON.parse(jsonText); } catch {
-        await message.reply('Invalid JSON.');
-        return true;
-      }
+      try { data = JSON.parse(jsonText); } catch { await message.reply('Invalid JSON.'); return true; }
       const list = Array.isArray(data) ? data : (data.tokens || []);
-      if (!list.length) { await message.reply('No tokens found in payload.'); return true; }
+      if (!list.length) { await message.reply('No tokens found.'); return true; }
       let added = 0, skipped = 0;
       for (const t of list) {
         if (!t.access_token || !t.user_id) { skipped++; continue; }
-        const exists = await one(
-          'SELECT id FROM tokens WHERE access_token = $1 OR (user_id = $2 AND valid = 1)',
-          [t.access_token, String(t.user_id)]
-        );
+        const exists = await one('SELECT id FROM tokens WHERE access_token = $1 OR (user_id = $2 AND valid = 1)', [t.access_token, String(t.user_id)]);
         if (exists) { skipped++; continue; }
-        await query(
-          `INSERT INTO tokens (user_id, access_token, refresh_token, expires_at, scope, valid)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [String(t.user_id), t.access_token, t.refresh_token || null, t.expires_at || null, t.scope || 'identify guilds.join', t.valid === 0 ? 0 : 1]
-        );
+        await query(`INSERT INTO tokens (user_id, access_token, refresh_token, expires_at, scope, valid) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [String(t.user_id), t.access_token, t.refresh_token || null, t.expires_at || null, t.scope || 'identify guilds.join', t.valid === 0 ? 0 : 1]);
         added++;
       }
       await message.reply({ embeds: [new EmbedBuilder().setTitle('Token Import').setColor(0x57f287).addFields(
-        { name: 'Added', value: '`' + added + '`', inline: true },
-        { name: 'Skipped', value: '`' + skipped + '`', inline: true }
+        { name: 'Added', value: '`' + added + '`', inline: true }, { name: 'Skipped', value: '`' + skipped + '`', inline: true }
       ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
-      logs.adminLog(client, 'Token import', 'By <@' + message.author.id + '> added=' + added);
       return true;
     }
     return false;
@@ -218,7 +195,6 @@ async function handleExtra(cmd, message, args, client, perms) {
     try { await client.user.setActivity(text.slice(0, 128), { type: 3 }); } catch {}
     await message.reply({ embeds: [new EmbedBuilder().setTitle('Bio Updated').setColor(0x57f287)
       .setDescription('`' + text.slice(0, 128) + '`').setFooter({ text: 'Member Farm' }).setTimestamp()] });
-    logs.adminLog(client, 'Bio changed', 'By <@' + message.author.id + '>');
     return true;
   }
 
@@ -228,21 +204,13 @@ async function handleExtra(cmd, message, args, client, perms) {
     if (!user) { await message.reply('Usage: banfarm @user [reason]'); return true; }
     if (String(user.id) === String(config.OWNER_ID)) { await message.reply('Cannot banfarm the owner.'); return true; }
     const reason = args.slice(1).join(' ') || 'No reason provided';
-    await query(
-      `INSERT INTO user_blacklist (user_id, reason, added_by) VALUES ($1, $2, $3)
-       ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason, added_by = EXCLUDED.added_by`,
-      [String(user.id), reason, message.author.id]
-    );
+    await query(`INSERT INTO user_blacklist (user_id, reason, added_by) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO UPDATE SET reason = EXCLUDED.reason, added_by = EXCLUDED.added_by`, [String(user.id), reason, message.author.id]);
     await query('DELETE FROM grants WHERE user_id = $1', [String(user.id)]);
     await queue.clearUserQueue(user.id);
     await message.reply({ embeds: [new EmbedBuilder().setTitle('User Banfarmed').setColor(0xed4245).addFields(
-      { name: 'User', value: '<@' + user.id + '>', inline: true },
-      { name: 'User ID', value: '`' + user.id + '`', inline: true },
-      { name: 'Reason', value: reason },
-      { name: 'Action by', value: '<@' + message.author.id + '>', inline: true }
-    ).setDescription('Grants revoked · queue cleared · blacklisted.')
-      .setFooter({ text: 'Member Farm' }).setTimestamp()] });
-    logs.adminLog(client, 'Banfarm', '<@' + user.id + '> by <@' + message.author.id + '> — ' + reason, 0xed4245);
+      { name: 'User', value: '<@' + user.id + '>', inline: true }, { name: 'User ID', value: '`' + user.id + '`', inline: true },
+      { name: 'Reason', value: reason }, { name: 'Action by', value: '<@' + message.author.id + '>', inline: true }
+    ).setDescription('Grants revoked · queue cleared · blacklisted.').setFooter({ text: 'Member Farm' }).setTimestamp()] });
     return true;
   }
 
@@ -252,21 +220,15 @@ async function handleExtra(cmd, message, args, client, perms) {
     if (sub === 'list' || !sub) {
       const rows = await many('SELECT * FROM bot_invites ORDER BY created_at DESC LIMIT 25');
       if (!rows.length) { await message.reply('No invite records yet.'); return true; }
-      const lines = rows.map(r =>
-        '`'+r.guild_id+'` **'+(r.guild_name||'?')+'** — by ' + (r.inviter_id ? '<@'+r.inviter_id+'>' : '`unknown`') + ' · ' + (r.member_count??'?') + ' members'
-      );
-      await message.reply({ embeds: [new EmbedBuilder().setTitle('Bot Invite Tracker')
-        .setDescription(lines.join('\n').slice(0, 4000))
-        .setColor(0x5865f2).setFooter({ text: 'Member Farm · last 25' }).setTimestamp()] });
+      const lines = rows.map(r => '`' + r.guild_id + '` **' + (r.guild_name || '?') + '** — by ' + (r.inviter_id ? '<@' + r.inviter_id + '>' : '`unknown`') + ' · ' + (r.member_count ?? '?') + ' members');
+      await message.reply({ embeds: [new EmbedBuilder().setTitle('Bot Invite Tracker').setDescription(lines.join('\n').slice(0, 4000)).setColor(0x5865f2).setFooter({ text: 'Member Farm · last 25' }).setTimestamp()] });
       return true;
     }
     if (sub === 'user') {
       const uid = message.mentions.users.first()?.id || args[1];
       if (!uid) { await message.reply('Usage: invites user @user'); return true; }
       const rows = await many('SELECT * FROM bot_invites WHERE inviter_id = $1 ORDER BY created_at DESC', [String(uid)]);
-      await message.reply({ embeds: [new EmbedBuilder().setTitle('Invites by User')
-        .setDescription(rows.length ? rows.map(r => '`'+r.guild_id+'` '+(r.guild_name||'')).join('\n') : 'None')
-        .setColor(0x5865f2).setFooter({ text: 'Member Farm' }).setTimestamp()] });
+      await message.reply({ embeds: [new EmbedBuilder().setTitle('Invites by User').setDescription(rows.length ? rows.map(r => '`' + r.guild_id + '` ' + (r.guild_name || '')).join('\n') : 'None').setColor(0x5865f2).setFooter({ text: 'Member Farm' }).setTimestamp()] });
       return true;
     }
     await message.reply('Usage: invites · invites user @user');
@@ -278,16 +240,13 @@ async function handleExtra(cmd, message, args, client, perms) {
     const sub = (args[0] || 'status').toLowerCase();
     if (sub === 'enable') {
       await setSetting('antiraid_enabled', '1');
-      await message.reply({ embeds: [new EmbedBuilder().setTitle('AntiRaid Enabled').setColor(0x57f287)
-        .setDescription('Queue auto-pauses when rate-limits spike.')
-        .setFooter({ text: 'Member Farm' }).setTimestamp()] });
+      await message.reply({ embeds: [new EmbedBuilder().setTitle('AntiRaid Enabled').setColor(0x57f287).setDescription('Queue auto-pauses when rate-limits spike.').setFooter({ text: 'Member Farm' }).setTimestamp()] });
       return true;
     }
     if (sub === 'disable') {
       await setSetting('antiraid_enabled', '0');
       await setSetting('antiraid_triggered', '0');
-      await message.reply({ embeds: [new EmbedBuilder().setTitle('AntiRaid Disabled').setColor(0xfaa61a)
-        .setFooter({ text: 'Member Farm' }).setTimestamp()] });
+      await message.reply({ embeds: [new EmbedBuilder().setTitle('AntiRaid Disabled').setColor(0xfaa61a).setFooter({ text: 'Member Farm' }).setTimestamp()] });
       return true;
     }
     if (sub === 'threshold') {
@@ -309,8 +268,7 @@ async function handleExtra(cmd, message, args, client, perms) {
     const triggered = (await getSetting('antiraid_triggered', '0')) === '1';
     let hits = [];
     try { hits = JSON.parse(await getSetting('antiraid_hits', '[]')); } catch {}
-    const now = Date.now();
-    hits = hits.filter(t => now - t < 5 * 60 * 1000);
+    hits = hits.filter(t => Date.now() - t < 5 * 60 * 1000);
     await message.reply({ embeds: [new EmbedBuilder().setTitle('AntiRaid Status').setColor(triggered ? 0xed4245 : 0x5865f2).addFields(
       { name: 'Enabled', value: enabled ? '`ON`' : '`OFF`', inline: true },
       { name: 'Threshold', value: '`' + threshold + '` / 5min', inline: true },
@@ -323,22 +281,17 @@ async function handleExtra(cmd, message, args, client, perms) {
 
   if (cmd === 'panel') {
     if (!(await perms.canUse(message.author.id, 'panel')) && !perms.isOwner(message.author.id)) return true;
-    const oauthUrl = await getSetting('oauth_link',
-      `https://discord.com/api/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI || '')}&response_type=code&scope=identify%20guilds.join`);
+    const oauthUrl = await getSetting('oauth_link', `https://discord.com/api/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI || '')}&response_type=code&scope=identify%20guilds.join`);
     const botInvite = config.BOT_INVITE || `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&permissions=8&scope=bot`;
     const stock = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'))?.c || 0;
     const tokens = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c || 0;
-    const emb = new EmbedBuilder()
-      .setTitle('Member Farm Panel')
-      .setColor(0x5865f2)
+    const emb = new EmbedBuilder().setTitle('Member Farm Panel').setColor(0x5865f2)
       .setDescription('Verify your account · Add the bot · Check live stock.')
       .addFields(
         { name: 'Valid Auths', value: '`' + tokens + '`', inline: true },
         { name: 'Stock', value: '`' + stock + '`', inline: true },
         { name: 'Servers', value: '`' + client.guilds.cache.size + '`', inline: true }
-      )
-      .setFooter({ text: 'Member Farm' })
-      .setTimestamp();
+      ).setFooter({ text: 'Member Farm' }).setTimestamp();
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setLabel('—> Verify').setStyle(ButtonStyle.Link).setURL(oauthUrl),
       new ButtonBuilder().setLabel('Add Bot →').setStyle(ButtonStyle.Link).setURL(botInvite),
@@ -363,19 +316,64 @@ async function handleExtra(cmd, message, args, client, perms) {
     const lastCheck = await getSetting('last_checkauth');
     const health = await getSetting('last_checkauth_health', '—');
     const lastCheckStr = lastCheck ? '<t:' + Math.floor(Number(lastCheck) / 1000) + ':R>' : '`never`';
+    await message.reply({ embeds: [new EmbedBuilder().setTitle('Bot Status').setColor(paused || triggered ? 0xed4245 : 0x57f287).addFields(
+      { name: 'Uptime', value: '`' + h + 'h ' + m + 'm ' + s + 's`', inline: true },
+      { name: 'Ping', value: '`' + Math.round(client.ws.ping) + 'ms`', inline: true },
+      { name: 'Guilds', value: '`' + client.guilds.cache.size + '`', inline: true },
+      { name: 'Valid Auths', value: '`' + tokens + '`', inline: true },
+      { name: 'Stock', value: '`' + stock + '`', inline: true },
+      { name: 'Queue', value: '`' + qC + '`' + (paused ? ' **PAUSED**' : ''), inline: true },
+      { name: 'AntiRaid', value: antiraid ? (triggered ? '**TRIGGERED**' : '`ON`') : '`OFF`', inline: true },
+      { name: 'Last Checkauth', value: lastCheckStr + ' · health `' + health + '%`', inline: true }
+    ).setFooter({ text: 'Member Farm' }).setTimestamp()] });
+    return true;
+  }
+
+  if (cmd === 'logtest') {
+    if (!(await perms.canUse(message.author.id, 'logs')) && !perms.isOwner(message.author.id)) return true;
+    const types = [
+      { key: 'farm', title: 'Farm Log Test', color: 0x57f287, desc: 'This is a **farm** log test message.' },
+      { key: 'server', title: 'Server Log Test', color: 0x5865f2, desc: 'This is a **server** log test message.' },
+      { key: 'errors', title: 'Error Log Test', color: 0xed4245, desc: 'This is an **errors** log test message.' },
+      { key: 'admin', title: 'Admin Log Test', color: 0xfaa61a, desc: 'This is an **admin** log test message.' },
+    ];
+    const results = [];
+    for (const t of types) {
+      const enabled = (await getSetting('log_' + t.key + '_enabled', '0')) === '1';
+      const channelId = await getSetting('log_' + t.key + '_channel');
+      if (!channelId) {
+        results.push({ name: t.key, value: '`no channel set`', inline: true });
+        continue;
+      }
+      if (!enabled) {
+        results.push({ name: t.key, value: '<#' + channelId + '> · **OFF**', inline: true });
+        continue;
+      }
+      try {
+        const ch = await client.channels.fetch(channelId).catch(() => null);
+        if (!ch) {
+          results.push({ name: t.key, value: '`channel not found`', inline: true });
+          continue;
+        }
+        await ch.send({
+          embeds: [new EmbedBuilder()
+            .setTitle(t.title)
+            .setDescription(t.desc + '\nTriggered by <@' + message.author.id + '>')
+            .setColor(t.color)
+            .setFooter({ text: 'Member Farm · log test' })
+            .setTimestamp()],
+        });
+        results.push({ name: t.key, value: '<#' + channelId + '> · **OK**', inline: true });
+      } catch (e) {
+        results.push({ name: t.key, value: '`send failed`', inline: true });
+        console.error('log test', t.key, e.message);
+      }
+    }
     await message.reply({ embeds: [new EmbedBuilder()
-      .setTitle('Bot Status')
-      .setColor(paused || triggered ? 0xed4245 : 0x57f287)
-      .addFields(
-        { name: 'Uptime', value: '`' + h + 'h ' + m + 'm ' + s + 's`', inline: true },
-        { name: 'Ping', value: '`' + Math.round(client.ws.ping) + 'ms`', inline: true },
-        { name: 'Guilds', value: '`' + client.guilds.cache.size + '`', inline: true },
-        { name: 'Valid Auths', value: '`' + tokens + '`', inline: true },
-        { name: 'Stock', value: '`' + stock + '`', inline: true },
-        { name: 'Queue', value: '`' + qC + '`' + (paused ? ' **PAUSED**' : ''), inline: true },
-        { name: 'AntiRaid', value: antiraid ? (triggered ? '**TRIGGERED**' : '`ON`') : '`OFF`', inline: true },
-        { name: 'Last Checkauth', value: lastCheckStr + ' · health `' + health + '%`', inline: true }
-      )
+      .setTitle('Log Test Results')
+      .setColor(0x5865f2)
+      .setDescription('Sent a test embed to each configured log channel.')
+      .addFields(results)
       .setFooter({ text: 'Member Farm' })
       .setTimestamp()] });
     return true;
