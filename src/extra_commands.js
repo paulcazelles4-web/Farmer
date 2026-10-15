@@ -17,6 +17,7 @@ function confirmRow(id) {
 
 async function handleExtra(cmd, message, args, client, perms) {
   if (cmd === 'color') return handleColor(message, args, client, perms);
+
   if (cmd === 'checkauth') {
     if (!(await perms.canUse(message.author.id, 'checkauth')) && !perms.isOwner(message.author.id)) return true;
     const statusMsg = await message.reply({ embeds: [new EmbedBuilder()
@@ -306,7 +307,6 @@ async function handleExtra(cmd, message, args, client, perms) {
   }
 
   if (cmd === 'status') {
-    const brand = await getEmbedColor();
     const uptimeMs = client.uptime || 0;
     const h = Math.floor(uptimeMs / 3600000);
     const m = Math.floor((uptimeMs % 3600000) / 60000);
@@ -335,48 +335,55 @@ async function handleExtra(cmd, message, args, client, perms) {
 
   if (cmd === 'logtest' || ((cmd === 'log' || cmd === 'logs') && (args[0] || '').toLowerCase() === 'test')) {
     if (!(await perms.canUse(message.author.id, 'logs')) && !perms.isOwner(message.author.id)) return true;
-    const types = [
-      { key: 'farm', title: 'Farm Log Test', color: 0x57f287, desc: 'This is a **farm** log test message.' },
-      { key: 'server', title: 'Server Log Test', color: 0x5865f2, desc: 'This is a **server** log test message.' },
-      { key: 'errors', title: 'Error Log Test', color: 0xed4245, desc: 'This is an **errors** log test message.' },
-      { key: 'admin', title: 'Admin Log Test', color: 0xfaa61a, desc: 'This is an **admin** log test message.' },
-    ];
     const results = [];
-    for (const t of types) {
-      const enabled = (await getSetting('log_' + t.key + '_enabled', '0')) === '1';
-      const channelId = await getSetting('log_' + t.key + '_channel');
-      if (!channelId) {
-        results.push({ name: t.key, value: '`no channel set`', inline: true });
-        continue;
-      }
-      if (!enabled) {
-        results.push({ name: t.key, value: '<#' + channelId + '> · **OFF**', inline: true });
-        continue;
-      }
-      try {
-        const ch = await client.channels.fetch(channelId).catch(() => null);
-        if (!ch) {
-          results.push({ name: t.key, value: '`channel not found`', inline: true });
-          continue;
-        }
-        await ch.send({
-          embeds: [new EmbedBuilder()
-            .setTitle(t.title)
-            .setDescription(t.desc + '\nTriggered by <@' + message.author.id + '>')
-            .setColor(t.color)
-            .setFooter({ text: 'Member Farm · log test' })
-            .setTimestamp()],
-        });
-        results.push({ name: t.key, value: '<#' + channelId + '> · **OK**', inline: true });
-      } catch (e) {
-        results.push({ name: t.key, value: '`send failed`', inline: true });
-        console.error('log test', t.key, e.message);
-      }
-    }
+
+    const farmRes = await logs.djoinLog(client, {
+      userTag: message.author.tag,
+      userId: message.author.id,
+      guildId: message.guild?.id || '000000000000000000',
+      joined: 2, alreadyIn: 1, maxed: 0, phoneLocked: 0, deauthorized: 0,
+      terminated: 0, banned: 0, transient: 0, stockLeft: 42, tier: 'x2 (simulated)',
+    });
+    results.push({ name: 'farm', value: farmRes?.ok ? '<#' + farmRes.channelId + '> · **OK**' : '`' + (farmRes?.reason || 'fail') + '`', inline: true });
+
+    const serverRes = await logs.botAddedLog(client, {
+      name: message.guild?.name || 'Simulated Server',
+      id: message.guild?.id || '000000000000000000',
+      memberCount: message.guild?.memberCount || 100,
+      inviterId: message.author.id,
+      inviterTag: message.author.tag,
+      botGuilds: client.guilds.cache.size,
+      icon: message.guild?.iconURL?.({ size: 128 }) || null,
+    });
+    results.push({ name: 'server', value: serverRes?.ok ? '<#' + serverRes.channelId + '> · **OK**' : '`' + (serverRes?.reason || 'fail') + '`', inline: true });
+
+    const fakeTrace = [
+      'Error: Used disallowed intents',
+      '    at WebSocketShard.onClose (/app/node_modules/@discordjs/ws/dist/index.js:1151:18)',
+      '    at connection.onclose (/app/node_modules/@discordjs/ws/dist/index.js:688:17)',
+      '    at WebSocket.onClose (/app/node_modules/ws/lib/event-target.js:220:9)',
+      '    at processTicksAndRejections (node:internal/process/task_queues:95:5)',
+    ].join('\n');
+    const errRes = await logs.errorLog(client, {
+      botName: client.user?.username || 'Member Farm',
+      command: 'log test',
+      userTag: message.author.tag,
+      userId: message.author.id,
+      channelName: message.channel?.name || 'unknown',
+      guildName: message.guild?.name || 'unknown',
+      errorType: 'Forbidden',
+      errorMessage: '403 Forbidden (error code: 50013): Missing Permissions',
+      traceback: fakeTrace,
+    });
+    results.push({ name: 'errors', value: errRes?.ok ? '<#' + errRes.channelId + '> · **OK**' : '`' + (errRes?.reason || 'fail') + '`', inline: true });
+
+    const adminRes = await logs.adminLog(client, 'Log Test', 'Simulated admin action by <@' + message.author.id + '>');
+    results.push({ name: 'admin', value: adminRes?.ok ? '<#' + adminRes.channelId + '> · **OK**' : '`' + (adminRes?.reason || 'fail') + '`', inline: true });
+
     await message.reply({ embeds: [new EmbedBuilder()
       .setTitle('Log Test Results')
       .setColor(0x5865f2)
-      .setDescription('Sent a test embed to each configured log channel.')
+      .setDescription('Simulated real log events through the logging pipeline.')
       .addFields(results)
       .setFooter({ text: 'Member Farm' })
       .setTimestamp()] });
