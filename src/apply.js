@@ -1,45 +1,61 @@
-// language: JavaScript, file: apply.js — restocker application flow
+// language: JavaScript, file: apply.js — restocker apply panel + modal
 const {
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelType,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } = require('discord.js');
 const { query, one, many, getSetting, setSetting } = require('./db');
 const perms = require('./permissions');
 const logs = require('./logs');
 const config = require('./config');
 
+// 5 questions max for Discord modal (one short + four paragraphs)
 const QUESTIONS = [
   {
     id: 'why',
-    text: '**Why** do you want to become a restocker on this farm?',
+    label: 'Why restocker?',
+    placeholder: 'Why do you want to restock for this farm?',
+    style: TextInputStyle.Paragraph,
+    required: true,
+    max: 500,
   },
   {
     id: 'volume',
-    text: 'How many **OAuth accounts** can you realistically supply **per week**?',
+    label: 'Weekly OAuth volume',
+    placeholder: 'How many accounts can you supply per week?',
+    style: TextInputStyle.Short,
+    required: true,
+    max: 100,
   },
   {
     id: 'experience',
-    text: 'Have you restocked for other member farms before? If yes, **which ones** and for how long?',
+    label: 'Past farm experience',
+    placeholder: 'Other farms? How long? What was your role?',
+    style: TextInputStyle.Paragraph,
+    required: true,
+    max: 500,
   },
   {
     id: 'quality',
-    text: 'Do you understand that **invalid / phone-locked / maxed** tokens are removed from stock and repeated junk can get you revoked? (yes/no + comment)',
+    label: 'Token quality policy',
+    placeholder: 'Confirm you understand invalid/phone-locked tokens get removed',
+    style: TextInputStyle.Short,
+    required: true,
+    max: 150,
   },
   {
     id: 'availability',
-    text: 'What is your **timezone** and usual availability for restocks?',
-  },
-  {
-    id: 'extra',
-    text: 'Anything else we should know? (optional — type `skip` to skip)',
+    label: 'Timezone & availability',
+    placeholder: 'e.g. CET, evenings weekdays',
+    style: TextInputStyle.Short,
+    required: true,
+    max: 150,
   },
 ];
-
-// in-memory sessions: userId -> { step, answers, messageId, channelId }
-const sessions = new Map();
 
 async function ensureTable() {
   await query(`
@@ -58,29 +74,67 @@ CREATE TABLE IF NOT EXISTS applications (
 `);
 }
 
-function buildQuestionEmbed(step, total, question) {
+function buildPanelEmbed() {
   return new EmbedBuilder()
     .setTitle('Restocker Application')
     .setColor(0x5865f2)
     .setDescription(
-      `Question **${step + 1}/${total}**\n\n${question.text}\n\n*Reply in this channel. Type \`cancel\` to abort.*`
+      [
+        'Want to **restock** OAuth accounts for this farm?',
+        '',
+        'Click **Apply** below and answer the questions.',
+        'Staff will review your application and assign the restocker role if accepted.',
+        '',
+        '**Requirements**',
+        '• Valid Discord account',
+        '• Ability to supply clean OAuth tokens',
+        '• Understand that bad tokens are removed from stock',
+      ].join('\n')
     )
     .setFooter({ text: 'Member Farm · Apply' })
     .setTimestamp();
 }
 
-function buildReviewEmbed(app, user) {
-  const answers = typeof app.answers === 'string' ? JSON.parse(app.answers) : app.answers;
+function panelButton() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('apply_open')
+      .setLabel('Apply')
+      .setStyle(ButtonStyle.Primary)
+  );
+}
+
+function buildModal() {
+  const modal = new ModalBuilder()
+    .setCustomId('apply_modal')
+    .setTitle('Restocker Application');
+
+  for (const q of QUESTIONS) {
+    const input = new TextInputBuilder()
+      .setCustomId(q.id)
+      .setLabel(q.label.slice(0, 45))
+      .setPlaceholder(q.placeholder.slice(0, 100))
+      .setStyle(q.style)
+      .setRequired(q.required)
+      .setMaxLength(q.max);
+    modal.addComponents(new ActionRowBuilder().addComponents(input));
+  }
+  return modal;
+}
+
+function buildReviewEmbed(app) {
+  const answers =
+    typeof app.answers === 'string' ? JSON.parse(app.answers) : app.answers || {};
   const fields = QUESTIONS.map((q) => ({
-    name: q.text.replace(/\*\*/g, '').slice(0, 100),
+    name: q.label,
     value: String(answers[q.id] || '—').slice(0, 1020),
   }));
   return new EmbedBuilder()
     .setTitle(`Restocker Application #${app.id}`)
-    .setColor(0xfaa61a)
+    .setColor(app.status === 'pending' ? 0xfaa61a : app.status === 'accepted' ? 0x57f287 : 0xed4245)
     .addFields(
       { name: 'Applicant', value: `<@${app.user_id}>\n\`${app.user_id}\``, inline: true },
-      { name: 'Tag', value: app.user_tag || user?.tag || '—', inline: true },
+      { name: 'Tag', value: app.user_tag || '—', inline: true },
       { name: 'Status', value: `\`${app.status}\``, inline: true },
       ...fields
     )
@@ -101,121 +155,11 @@ function reviewButtons(appId) {
   );
 }
 
-async function startApply(message, client) {
-  await ensureTable();
-
-  const open = await one(
-    `SELECT id FROM applications WHERE user_id = $1 AND status = 'pending'`,
-    [message.author.id]
-  );
-  if (open) {
-    await message.reply(`You already have a pending application (**#${open.id}**). Wait for staff review.`);
-    return;
-  }
-
-  if (sessions.has(message.author.id)) {
-    await message.reply('You already have an application in progress. Finish it or type `cancel`.');
-    return;
-  }
-
-  // Prefer DM
-  let channel = null;
-  try {
-    const dm = await message.author.createDM();
-    await dm.send({ embeds: [buildQuestionEmbed(0, QUESTIONS.length, QUESTIONS[0])] });
-    channel = dm;
-    await message.reply('Check your **DMs** — the application questions were sent there.');
-  } catch {
-    channel = message.channel;
-    await message.reply({
-      embeds: [buildQuestionEmbed(0, QUESTIONS.length, QUESTIONS[0])],
-    });
-  }
-
-  sessions.set(message.author.id, {
-    step: 0,
-    answers: {},
-    channelId: channel.id,
-    startedAt: Date.now(),
+async function postPanel(channel) {
+  return channel.send({
+    embeds: [buildPanelEmbed()],
+    components: [panelButton()],
   });
-}
-
-async function handleApplyMessage(message, client) {
-  const session = sessions.get(message.author.id);
-  if (!session) return false;
-  if (message.channel.id !== session.channelId) return false;
-  if (message.author.bot) return false;
-
-  const text = message.content.trim();
-  if (!text) return true;
-
-  if (text.toLowerCase() === 'cancel') {
-    sessions.delete(message.author.id);
-    await message.reply('Application **cancelled**.');
-    return true;
-  }
-
-  const q = QUESTIONS[session.step];
-  let answer = text;
-  if (q.id === 'extra' && text.toLowerCase() === 'skip') answer = '—';
-
-  session.answers[q.id] = answer.slice(0, 1500);
-  session.step += 1;
-
-  if (session.step >= QUESTIONS.length) {
-    sessions.delete(message.author.id);
-    await ensureTable();
-
-    const row = await one(
-      `INSERT INTO applications (user_id, user_tag, type, answers, status)
-       VALUES ($1, $2, 'restocker', $3::jsonb, 'pending')
-       RETURNING *`,
-      [message.author.id, message.author.tag, JSON.stringify(session.answers)]
-    );
-
-    const reviewChId = await getSetting('apply_channel');
-    const reviewEmbed = buildReviewEmbed(row, message.author);
-
-    if (reviewChId) {
-      try {
-        const ch = await client.channels.fetch(reviewChId).catch(() => null);
-        if (ch) {
-          await ch.send({
-            content: 'New restocker application',
-            embeds: [reviewEmbed],
-            components: [reviewButtons(row.id)],
-          });
-        }
-      } catch (e) {
-        console.error('apply review post', e.message);
-      }
-    }
-
-    await message.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle('Application Submitted')
-          .setColor(0x57f287)
-          .setDescription(
-            `Your restocker application **#${row.id}** was submitted.\nStaff will review it shortly.`
-          )
-          .setFooter({ text: 'Member Farm' })
-          .setTimestamp(),
-      ],
-    });
-
-    logs.adminLog(
-      client,
-      'New application',
-      `<@${message.author.id}> submitted restocker application **#${row.id}**`
-    );
-    return true;
-  }
-
-  await message.reply({
-    embeds: [buildQuestionEmbed(session.step, QUESTIONS.length, QUESTIONS[session.step])],
-  });
-  return true;
 }
 
 async function acceptApp(appId, reviewer, client) {
@@ -229,15 +173,20 @@ async function acceptApp(appId, reviewer, client) {
     [reviewer.id, appId]
   );
 
-  await perms.grant(app.user_id, 'restock');
-
+  // Role only — no restock permission grant
   const roleId = await getSetting('restocker_role');
-  if (roleId && config.MAIN_GUILD_ID) {
+  let roleGiven = false;
+  if (roleId) {
     try {
       const guild = await client.guilds.fetch(config.MAIN_GUILD_ID).catch(() => null);
       const member = await guild?.members.fetch(app.user_id).catch(() => null);
-      if (member) await member.roles.add(roleId).catch(() => {});
-    } catch {}
+      if (member) {
+        await member.roles.add(roleId);
+        roleGiven = true;
+      }
+    } catch (e) {
+      console.error('apply role', e.message);
+    }
   }
 
   try {
@@ -248,7 +197,10 @@ async function acceptApp(appId, reviewer, client) {
           .setTitle('Application Accepted')
           .setColor(0x57f287)
           .setDescription(
-            `Your restocker application **#${appId}** was **accepted**.\nYou can now use restock commands.`
+            `Your restocker application **#${appId}** was **accepted**.` +
+              (roleGiven
+                ? '\nThe restocker role has been assigned.'
+                : '\nStaff will assign your role shortly.')
           )
           .setFooter({ text: 'Member Farm' })
           .setTimestamp(),
@@ -259,9 +211,10 @@ async function acceptApp(appId, reviewer, client) {
   logs.adminLog(
     client,
     'Application accepted',
-    `**#${appId}** <@${app.user_id}> by <@${reviewer.id}>`
+    `**#${appId}** <@${app.user_id}> by <@${reviewer.id}>` +
+      (roleGiven ? ' · role given' : ' · **no restocker_role set**')
   );
-  return { ok: true, app };
+  return { ok: true, app, roleGiven };
 }
 
 async function denyApp(appId, reviewer, client, note) {
@@ -304,9 +257,12 @@ async function handleApplyCommand(message, args, client, permsMod) {
   await ensureTable();
   const sub = (args[0] || '').toLowerCase();
 
-  // User start: ?apply  or  ?apply restocker
-  if (!sub || sub === 'restocker' || sub === 'start') {
-    await startApply(message, client);
+  // Admin posts the permanent panel
+  if (sub === 'panel' || sub === 'post') {
+    if (!(await permsMod.canUse(message.author.id, 'apply')) && !permsMod.isOwner(message.author.id))
+      return true;
+    await postPanel(message.channel);
+    await message.reply('Apply panel posted.').then((m) => setTimeout(() => m.delete().catch(() => {}), 4000));
     return true;
   }
 
@@ -323,7 +279,7 @@ async function handleApplyCommand(message, args, client, permsMod) {
       await message.reply({
         embeds: [
           new EmbedBuilder()
-            .setTitle('Apply Channel Set')
+            .setTitle('Apply Review Channel Set')
             .setColor(0x57f287)
             .addFields({ name: 'Channel', value: `${ch}` })
             .setFooter({ text: 'Member Farm' })
@@ -333,7 +289,7 @@ async function handleApplyCommand(message, args, client, permsMod) {
       return true;
     }
     const id = await getSetting('apply_channel', 'not set');
-    await message.reply(id === 'not set' ? 'No apply channel set.' : `Apply channel: <#${id}>`);
+    await message.reply(id === 'not set' ? 'No review channel set.' : `Review channel: <#${id}>`);
     return true;
   }
 
@@ -353,6 +309,7 @@ async function handleApplyCommand(message, args, client, permsMod) {
             .setTitle('Restocker Role Set')
             .setColor(0x57f287)
             .addFields({ name: 'Role', value: `${role}` })
+            .setDescription('Accepted applicants receive **only this role** (no restock command grant).')
             .setFooter({ text: 'Member Farm' })
             .setTimestamp(),
         ],
@@ -375,8 +332,7 @@ async function handleApplyCommand(message, args, client, permsMod) {
       return true;
     }
     const lines = rows.map(
-      (r) =>
-        `**#${r.id}** <@${r.user_id}> · \`${r.status}\` · <t:${r.created_at}:R>`
+      (r) => `**#${r.id}** <@${r.user_id}> · \`${r.status}\` · <t:${r.created_at}:R>`
     );
     await message.reply({
       embeds: [
@@ -424,7 +380,10 @@ async function handleApplyCommand(message, args, client, permsMod) {
       await message.reply(`Cannot accept: \`${res.reason}\``);
       return true;
     }
-    await message.reply(`Application **#${id}** accepted. Restock grant given.`);
+    await message.reply(
+      `Application **#${id}** accepted.` +
+        (res.roleGiven ? ' Role assigned.' : ' *(Set restocker role with `apply role set @role`)*')
+    );
     return true;
   }
 
@@ -446,15 +405,45 @@ async function handleApplyCommand(message, args, client, permsMod) {
     return true;
   }
 
+  // Default help for staff / users
   await message.reply(
-    'Usage: `apply` · `apply channel set #ch` · `apply role set @role` · `apply list` · `apply view <id>` · `apply accept <id>` · `apply deny <id> [reason]`'
+    [
+      '**Apply system**',
+      'Users: click **Apply** on the panel (staff posts it with `apply panel`).',
+      '',
+      'Staff:',
+      '`apply panel` — post embed + button in this channel',
+      '`apply channel set #ch` — review channel for submissions',
+      '`apply role set @role` — role given on accept (role only, no restock grant)',
+      '`apply list` · `apply view <id>`',
+      '`apply accept <id>` · `apply deny <id> [reason]`',
+    ].join('\n')
   );
   return true;
 }
 
 async function handleApplyButton(interaction, client) {
-  const id = interaction.customId;
-  if (!id.startsWith('apply_accept_') && !id.startsWith('apply_deny_')) return false;
+  // Open modal
+  if (interaction.customId === 'apply_open') {
+    await ensureTable();
+    const open = await one(
+      `SELECT id FROM applications WHERE user_id = $1 AND status = 'pending'`,
+      [interaction.user.id]
+    );
+    if (open) {
+      await interaction.reply({
+        content: `You already have a pending application (**#${open.id}**).`,
+        ephemeral: true,
+      });
+      return true;
+    }
+    await interaction.showModal(buildModal());
+    return true;
+  }
+
+  // Accept / Deny
+  if (!interaction.customId.startsWith('apply_accept_') && !interaction.customId.startsWith('apply_deny_'))
+    return false;
 
   const isOwner = String(interaction.user.id) === String(config.OWNER_ID);
   const can = isOwner || (await perms.canUse(interaction.user.id, 'apply'));
@@ -463,37 +452,115 @@ async function handleApplyButton(interaction, client) {
     return true;
   }
 
-  const appId = parseInt(id.split('_').pop(), 10);
-  if (id.startsWith('apply_accept_')) {
+  const appId = parseInt(interaction.customId.split('_').pop(), 10);
+
+  if (interaction.customId.startsWith('apply_accept_')) {
     const res = await acceptApp(appId, interaction.user, client);
     if (!res.ok) {
       await interaction.reply({ content: `Cannot accept: \`${res.reason}\``, ephemeral: true });
       return true;
     }
+    const emb = buildReviewEmbed({ ...res.app, status: 'accepted' });
     await interaction.update({
-      content: `Accepted by <@${interaction.user.id}>`,
+      content: `Accepted by <@${interaction.user.id}>` +
+        (res.roleGiven ? ' · role assigned' : ' · set `apply role set @role`'),
+      embeds: [emb],
       components: [],
     });
     return true;
   }
 
-  // deny via button — ask reason optionally via modal would be ideal; quick deny
   const res = await denyApp(appId, interaction.user, client, 'Denied via button');
   if (!res.ok) {
     await interaction.reply({ content: `Cannot deny: \`${res.reason}\``, ephemeral: true });
     return true;
   }
+  const emb = buildReviewEmbed({ ...res.app, status: 'denied' });
   await interaction.update({
     content: `Denied by <@${interaction.user.id}>`,
+    embeds: [emb],
     components: [],
   });
   return true;
+}
+
+async function handleApplyModal(interaction, client) {
+  if (interaction.customId !== 'apply_modal') return false;
+
+  await ensureTable();
+
+  const open = await one(
+    `SELECT id FROM applications WHERE user_id = $1 AND status = 'pending'`,
+    [interaction.user.id]
+  );
+  if (open) {
+    await interaction.reply({
+      content: `You already have a pending application (**#${open.id}**).`,
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  const answers = {};
+  for (const q of QUESTIONS) {
+    answers[q.id] = (interaction.fields.getTextInputValue(q.id) || '').slice(0, q.max);
+  }
+
+  const row = await one(
+    `INSERT INTO applications (user_id, user_tag, type, answers, status)
+     VALUES ($1, $2, 'restocker', $3::jsonb, 'pending')
+     RETURNING *`,
+    [interaction.user.id, interaction.user.tag, JSON.stringify(answers)]
+  );
+
+  const reviewChId = await getSetting('apply_channel');
+  if (reviewChId) {
+    try {
+      const ch = await client.channels.fetch(reviewChId).catch(() => null);
+      if (ch) {
+        await ch.send({
+          content: 'New restocker application',
+          embeds: [buildReviewEmbed(row)],
+          components: [reviewButtons(row.id)],
+        });
+      }
+    } catch (e) {
+      console.error('apply review post', e.message);
+    }
+  }
+
+  await interaction.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle('Application Submitted')
+        .setColor(0x57f287)
+        .setDescription(
+          `Your restocker application **#${row.id}** was submitted.\nStaff will review it shortly.`
+        )
+        .setFooter({ text: 'Member Farm' })
+        .setTimestamp(),
+    ],
+    ephemeral: true,
+  });
+
+  logs.adminLog(
+    client,
+    'New application',
+    `<@${interaction.user.id}> submitted restocker application **#${row.id}**`
+  );
+  return true;
+}
+
+// Legacy no-op for message Q&A sessions (panel+modal only now)
+async function handleApplyMessage() {
+  return false;
 }
 
 module.exports = {
   handleApplyCommand,
   handleApplyMessage,
   handleApplyButton,
-  startApply,
+  handleApplyModal,
   ensureTable,
+  postPanel,
 };
