@@ -128,6 +128,20 @@ async function isAntiLeave(guildId) {
       console.error('apply modal', e.message);
     }
 
+    try {
+      if (interaction.isStringSelectMenu() && interaction.customId === 'help_category') {
+        const { buildHelpPayload } = require('./help');
+        const { getEmbedColor } = require('./embed_util');
+        const prefix = (await getSetting('prefix', config.DEFAULT_PREFIX)) || config.DEFAULT_PREFIX;
+        const color = await getEmbedColor();
+        const cat = interaction.values[0] || 'core';
+        await interaction.update(buildHelpPayload(prefix, color, cat));
+        return;
+      }
+    } catch (e) {
+      console.error('help select', e.message);
+    }
+
     if (!interaction.isButton()) return;
 
     try {
