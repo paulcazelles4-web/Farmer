@@ -5,6 +5,8 @@ const config = require('./config');
 const logs = require('./logs');
 const queue = require('./queue');
 const { buildHelpEmbed } = require('./help');
+const { handleColor } = require('./color_cmd');
+const { getEmbedColor } = require('./embed_util');
 
 function confirmRow(id) {
   return new ActionRowBuilder().addComponents(
@@ -14,6 +16,7 @@ function confirmRow(id) {
 }
 
 async function handleExtra(cmd, message, args, client, perms) {
+  if (cmd === 'color') return handleColor(message, args, client, perms);
   if (cmd === 'checkauth') {
     if (!(await perms.canUse(message.author.id, 'checkauth')) && !perms.isOwner(message.author.id)) return true;
     const statusMsg = await message.reply({ embeds: [new EmbedBuilder()
@@ -280,11 +283,12 @@ async function handleExtra(cmd, message, args, client, perms) {
 
   if (cmd === 'panel') {
     if (!(await perms.canUse(message.author.id, 'panel')) && !perms.isOwner(message.author.id)) return true;
+    const brand = await getEmbedColor();
     const oauthUrl = await getSetting('oauth_link', `https://discord.com/api/oauth2/authorize?client_id=${process.env.CLIENT_ID}&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI || '')}&response_type=code&scope=identify%20guilds.join`);
     const botInvite = config.BOT_INVITE || `https://discord.com/oauth2/authorize?client_id=${process.env.CLIENT_ID}&permissions=8&scope=bot`;
     const stock = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'))?.c || 0;
     const tokens = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c || 0;
-    const emb = new EmbedBuilder().setTitle('Member Farm Panel').setColor(0x5865f2)
+    const emb = new EmbedBuilder().setTitle('Member Farm Panel').setColor(brand)
       .setDescription('Verify your account · Add the bot · Check live stock.')
       .addFields(
         { name: 'Valid Auths', value: '`' + tokens + '`', inline: true },
@@ -302,10 +306,10 @@ async function handleExtra(cmd, message, args, client, perms) {
   }
 
   if (cmd === 'status') {
+    const brand = await getEmbedColor();
     const uptimeMs = client.uptime || 0;
     const h = Math.floor(uptimeMs / 3600000);
-    const m = Math.floor((uptimeMs % 60000) / 1000);
-    const m2 = Math.floor((uptimeMs % 3600000) / 60000);
+    const m = Math.floor((uptimeMs % 3600000) / 60000);
     const s = Math.floor((uptimeMs % 60000) / 1000);
     const stock = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'))?.c || 0;
     const tokens = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c || 0;
@@ -317,7 +321,7 @@ async function handleExtra(cmd, message, args, client, perms) {
     const health = await getSetting('last_checkauth_health', '—');
     const lastCheckStr = lastCheck ? '<t:' + Math.floor(Number(lastCheck) / 1000) + ':R>' : '`never`';
     await message.reply({ embeds: [new EmbedBuilder().setTitle('Bot Status').setColor(paused || triggered ? 0xed4245 : 0x57f287).addFields(
-      { name: 'Uptime', value: '`' + h + 'h ' + m2 + 'm ' + s + 's`', inline: true },
+      { name: 'Uptime', value: '`' + h + 'h ' + m + 'm ' + s + 's`', inline: true },
       { name: 'Ping', value: '`' + Math.round(client.ws.ping) + 'ms`', inline: true },
       { name: 'Guilds', value: '`' + client.guilds.cache.size + '`', inline: true },
       { name: 'Valid Auths', value: '`' + tokens + '`', inline: true },
