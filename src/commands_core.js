@@ -5,7 +5,8 @@ const config = require('./config');
 const perms = require('./permissions');
 const logs = require('./logs');
 const queue = require('./queue');
-const { handleExtra, buildHelpEmbed } = require('./extra_commands');
+const { handleExtra } = require('./extra_commands');
+const { buildHelpPayload, buildHelpEmbed } = require('./help');
 const { getEmbedColor } = require('./embed_util');
 
 async function getPrefix() {
@@ -41,7 +42,7 @@ async function handleCommand(message, client) {
     return message.reply('Bot is currently under maintenance.');
   }
 
-  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status'];
+  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status', 'apply'];
   if (!publicCmds.includes(cmd) && !(await perms.canUse(message.author.id, cmd)) && !perms.isOwner(message.author.id)) return;
 
   if (cmd === 'token' && args[0] && ['export', 'import'].includes(String(args[0]).toLowerCase())) {
@@ -63,7 +64,7 @@ async function handleCommand(message, client) {
         break;
       }
       case 'help': {
-        await message.reply({ embeds: [buildHelpEmbed(prefix, brandColor)] });
+        await message.reply(buildHelpPayload(prefix, brandColor, 'core'));
         break;
       }
       case 'auth': {
