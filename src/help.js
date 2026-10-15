@@ -74,7 +74,7 @@ function buildHelpEmbed(prefix) {
         value: [
           '`' + p + 'logfarm|logserver|logerrors|logadmin`',
           'enable · disable · set #ch',
-          '`' + p + 'logs status`',
+          '`' + p + 'logs status` · `' + p + 'log test`',
         ].join('\n'),
         inline: true,
       },
