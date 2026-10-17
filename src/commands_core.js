@@ -42,7 +42,7 @@ async function handleCommand(message, client) {
     return message.reply('Bot is currently under maintenance.');
   }
 
-  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status', 'apply'];
+  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status'];
   if (!publicCmds.includes(cmd) && !(await perms.canUse(message.author.id, cmd)) && !perms.isOwner(message.author.id)) return;
 
   if (cmd === 'token' && args[0] && ['export', 'import'].includes(String(args[0]).toLowerCase())) {
@@ -64,7 +64,7 @@ async function handleCommand(message, client) {
         break;
       }
       case 'help': {
-        await message.reply(buildHelpPayload(prefix, brandColor, 'core'));
+        await message.reply(await buildHelpPayload(prefix, brandColor, 'core', message.author.id));
         break;
       }
       case 'auth': {
