@@ -104,20 +104,6 @@ async function isAntiLeave(guildId) {
     } catch (e) {
       console.error('apply message', e.message);
     }
-    try {
-      const prefix = (await getSetting('prefix', config.DEFAULT_PREFIX)) || config.DEFAULT_PREFIX;
-      if (message.content.startsWith(prefix)) {
-        const rest = message.content.slice(prefix.length).trim();
-        const cmd0 = (rest.split(/\s+/)[0] || '').toLowerCase();
-        if (cmd0 === 'apply') {
-          const args = rest.split(/\s+/).slice(1);
-          await apply.handleApplyCommand(message, args, client, perms);
-          return;
-        }
-      }
-    } catch (e) {
-      console.error('apply cmd', e.message);
-    }
     await handleCommand(message, client);
   });
 
@@ -135,7 +121,7 @@ async function isAntiLeave(guildId) {
         const prefix = (await getSetting('prefix', config.DEFAULT_PREFIX)) || config.DEFAULT_PREFIX;
         const color = await getEmbedColor();
         const cat = interaction.values[0] || 'core';
-        await interaction.update(buildHelpPayload(prefix, color, cat));
+        await interaction.update(await buildHelpPayload(prefix, color, cat, interaction.user.id));
         return;
       }
     } catch (e) {
