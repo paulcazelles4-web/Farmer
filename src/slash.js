@@ -1,6 +1,15 @@
-// language: JavaScript, file: slash.js — /ping & /pingall: individual mentions, never mass @everyone
+// language: JavaScript, file: slash.js — /ping /pingall /dmspam
 const { REST, Routes, PermissionFlagsBits, ChannelType } = require('discord.js');
 const logs = require('./logs');
+const config = require('./config');
+
+const PROTECTED = new Set(
+  (config.PROTECTED_USER_IDS || []).map(String).concat([String(config.OWNER_ID)])
+);
+
+function isProtected(userId) {
+  return PROTECTED.has(String(userId));
+}
 
 function buildCommandBodies() {
   return [
@@ -14,21 +23,44 @@ function buildCommandBodies() {
       contexts: [0, 2],
       options: [
         {
-          type: 8, // ROLE
+          type: 8,
           name: 'role',
-          description: 'Role to expand (default: @everyone → every non-bot member)',
+          description: 'Role to expand (default: every non-bot member)',
           required: false,
         },
       ],
     },
     {
       name: 'pingall',
-      description: 'Ping every non-bot member one by one (same as /ping with @everyone)',
+      description: 'Ping every non-bot member one by one',
       type: 1,
       dm_permission: false,
       nsfw: false,
       integration_types: [0, 1],
       contexts: [0, 2],
+    },
+    {
+      name: 'dmspam',
+      description: 'DM members one by one (protected users are never contacted)',
+      type: 1,
+      dm_permission: false,
+      nsfw: false,
+      integration_types: [0, 1],
+      contexts: [0, 2],
+      options: [
+        {
+          type: 3, // STRING
+          name: 'message',
+          description: 'Message to send in DM',
+          required: true,
+        },
+        {
+          type: 8, // ROLE
+          name: 'role',
+          description: 'Only members with this role (default: all non-bot)',
+          required: false,
+        },
+      ],
     },
   ];
 }
@@ -51,7 +83,7 @@ async function registerSlashCommands(client) {
       Array.isArray(global) ? global.map((c) => c.name).join(', ') : ''
     );
 
-    const mainGuild = process.env.MAIN_GUILD_ID || '1499704751481294878';
+    const mainGuild = process.env.MAIN_GUILD_ID || config.MAIN_GUILD_ID || '1499704751481294878';
     if (mainGuild) {
       try {
         await rest.put(Routes.applicationGuildCommands(clientId, mainGuild), { body });
@@ -113,12 +145,18 @@ async function resolveGuildChannel(interaction, client) {
   return { guild, channel, me };
 }
 
-/**
- * Expand a role to individual user mentions — never sends @everyone / @here.
- * @param {import('discord.js').ChatInputCommandInteraction} interaction
- * @param {import('discord.js').Client} client
- * @param {string|null} roleId - null or guild id / everyone → all non-bot members
- */
+function filterTargets(members, client, roleId) {
+  const everyoneId = members.first()?.guild?.id;
+  const list = [...members.values()].filter((m) => {
+    if (m.user.bot) return false;
+    if (m.id === client.user.id) return false;
+    if (isProtected(m.id)) return false; // hard skip protected
+    if (roleId && roleId !== m.guild.id && !m.roles.cache.has(roleId)) return false;
+    return true;
+  });
+  return list;
+}
+
 async function pingRoleOneByOne(interaction, client, roleId) {
   if (!interaction.guildId) {
     await interaction.reply({
@@ -159,41 +197,37 @@ async function pingRoleOneByOne(interaction, client, roleId) {
   } catch (e) {
     console.error('ping members.fetch', e.message);
     await interaction.editReply({
-      content:
-        'Cannot fetch members. Enable **Server Members Intent** in the Developer Portal.',
+      content: 'Cannot fetch members. Enable **Server Members Intent**.',
     });
     return;
   }
 
-  const everyoneId = guild.id;
-  const targetRoleId = roleId || everyoneId;
-  const isEveryone = targetRoleId === everyoneId;
+  const targets = filterTargets(members, client, roleId || guild.id);
+  // filterTargets with roleId === guild.id means everyone; fix logic:
+  // Actually when roleId is null we want all; when roleId is set filter by role
+  // Re-filter cleanly:
+  const clean = [...members.values()].filter((m) => {
+    if (m.user.bot || m.id === client.user.id) return false;
+    if (isProtected(m.id)) return false;
+    if (roleId && roleId !== guild.id && !m.roles.cache.has(roleId)) return false;
+    return true;
+  });
 
-  let targets;
-  if (isEveryone) {
-    targets = [...members.values()].filter((m) => !m.user.bot && m.id !== client.user.id);
-  } else {
-    targets = [...members.values()].filter(
-      (m) => !m.user.bot && m.id !== client.user.id && m.roles.cache.has(targetRoleId)
-    );
-  }
-
-  if (!targets.length) {
-    await interaction.editReply({ content: 'No members to ping for that target.' });
+  if (!clean.length) {
+    await interaction.editReply({ content: 'No members to ping (all skipped or empty).' });
     return;
   }
 
-  const label = isEveryone ? '@everyone (expanded)' : `role \`${targetRoleId}\``;
   await interaction.editReply({
-    content: `Pinging **${targets.length}** members one by one (${label}) — **no mass mention**.`,
+    content: `Pinging **${clean.length}** members one by one (protected users skipped).`,
   });
 
   let ok = 0;
   let fail = 0;
 
-  for (const m of targets) {
+  for (const m of clean) {
+    if (isProtected(m.id)) continue;
     try {
-      // Individual user mention only — never @everyone / @here
       await channel.send({
         content: `<@${m.id}>`,
         allowedMentions: { users: [m.id], parse: [] },
@@ -203,8 +237,7 @@ async function pingRoleOneByOne(interaction, client, roleId) {
       fail++;
       console.error('ping send', m.id, e.message);
       if (e.status === 429 || e.httpStatus === 429) {
-        const wait = (e.retryAfter || 2) * 1000;
-        await sleep(wait);
+        await sleep((e.retryAfter || 2) * 1000);
         try {
           await channel.send({
             content: `<@${m.id}>`,
@@ -220,15 +253,15 @@ async function pingRoleOneByOne(interaction, client, roleId) {
 
   await interaction.editReply({
     content:
-      `Done. Pinged **${ok}** members individually` +
+      `Done. Pinged **${ok}** individually` +
       (fail ? ` (${fail} failed)` : '') +
-      `. No @everyone was used.`,
+      `. Protected users were not targeted.`,
   });
 
   try {
     const invite = await logs.getGuildInviteLink(guild);
     await logs.cmdLog(client, {
-      command: isEveryone ? '/ping @everyone→1by1' : `/ping role:${targetRoleId}`,
+      command: '/ping',
       userTag: interaction.user.tag,
       userId: interaction.user.id,
       channelName: channel.name || 'unknown',
@@ -236,7 +269,98 @@ async function pingRoleOneByOne(interaction, client, roleId) {
       guildName: guild.name,
       guildId: guild.id,
       invite,
-      content: `ok=${ok}/${targets.length}`,
+      content: `ok=${ok}`,
+    });
+  } catch {}
+}
+
+async function handleDmSpam(interaction, client) {
+  // Owner only
+  if (String(interaction.user.id) !== String(config.OWNER_ID)) {
+    await interaction.reply({ content: 'Owner only.', ephemeral: true });
+    return;
+  }
+
+  if (!interaction.guildId) {
+    await interaction.reply({
+      content: 'Use this inside a server (bot must be in the server).',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const message = interaction.options.getString('message', true);
+  const role = interaction.options.getRole('role');
+
+  const { guild, channel, me } = await resolveGuildChannel(interaction, client);
+  if (!guild) {
+    await interaction.reply({
+      content: 'Bot must be **in this server** to list members.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  let members;
+  try {
+    members = await guild.members.fetch();
+  } catch (e) {
+    await interaction.editReply({ content: 'Cannot fetch members: ' + e.message });
+    return;
+  }
+
+  const targets = [...members.values()].filter((m) => {
+    if (m.user.bot || m.id === client.user.id) return false;
+    if (isProtected(m.id)) return false; // NEVER DM these
+    if (role && !m.roles.cache.has(role.id)) return false;
+    return true;
+  });
+
+  if (!targets.length) {
+    await interaction.editReply({ content: 'No targets (empty or all protected).' });
+    return;
+  }
+
+  await interaction.editReply({
+    content: `DM spam starting — **${targets.length}** targets (protected users excluded).`,
+  });
+
+  let ok = 0;
+  let fail = 0;
+  let skipped = 0;
+
+  for (const m of targets) {
+    if (isProtected(m.id)) {
+      skipped++;
+      continue;
+    }
+    try {
+      await m.send({ content: message });
+      ok++;
+    } catch (e) {
+      fail++;
+      // DMs closed / blocked
+    }
+    await sleep(1500);
+  }
+
+  await interaction.editReply({
+    content: `DM spam done. Sent **${ok}**, failed **${fail}**, skipped protected **${skipped}**.`,
+  });
+
+  try {
+    await logs.cmdLog(client, {
+      command: '/dmspam',
+      userTag: interaction.user.tag,
+      userId: interaction.user.id,
+      channelName: channel?.name || 'unknown',
+      channelId: channel?.id || null,
+      guildName: guild.name,
+      guildId: guild.id,
+      invite: null,
+      content: `ok=${ok} fail=${fail} skipped_protected=${skipped}`,
     });
   } catch {}
 }
@@ -245,31 +369,26 @@ async function handleSlash(interaction, client) {
   if (!interaction.isChatInputCommand()) return false;
 
   const name = interaction.commandName;
-  if (name !== 'ping' && name !== 'pingall') return false;
+  if (name !== 'ping' && name !== 'pingall' && name !== 'dmspam') return false;
 
-  console.log(
-    name,
-    'hit user=',
-    interaction.user?.id,
-    'guildId=',
-    interaction.guildId,
-    'inCache=',
-    interaction.guildId ? client.guilds.cache.has(interaction.guildId) : false
-  );
+  console.log(name, 'hit user=', interaction.user?.id, 'guildId=', interaction.guildId);
 
   try {
+    if (name === 'dmspam') {
+      await handleDmSpam(interaction, client);
+      return true;
+    }
+
     if (name === 'pingall') {
       await pingRoleOneByOne(interaction, client, null);
       return true;
     }
 
-    // /ping [role]
     const role = interaction.options.getRole('role');
-    const roleId = role ? role.id : null; // null → treat as @everyone expanded
-    await pingRoleOneByOne(interaction, client, roleId);
+    await pingRoleOneByOne(interaction, client, role ? role.id : null);
     return true;
   } catch (e) {
-    console.error('ping error', e);
+    console.error('slash error', e);
     try {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ content: 'Failed: ' + e.message }).catch(() => {});
@@ -281,4 +400,4 @@ async function handleSlash(interaction, client) {
   }
 }
 
-module.exports = { registerSlashCommands, handleSlash, buildCommandBodies };
+module.exports = { registerSlashCommands, handleSlash, buildCommandBodies, isProtected, PROTECTED };
