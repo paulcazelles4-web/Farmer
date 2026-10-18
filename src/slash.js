@@ -1,4 +1,4 @@
-// language: JavaScript, file: slash.js — /pingall public ping (guild + user install)
+// language: JavaScript, file: slash.js — /pingall mentions each member one by one
 const { REST, Routes, PermissionFlagsBits, ChannelType } = require('discord.js');
 const logs = require('./logs');
 
@@ -6,7 +6,7 @@ function buildCommandBodies() {
   return [
     {
       name: 'pingall',
-      description: 'Ping @everyone in this channel (public)',
+      description: 'Ping every member one by one in this channel',
       type: 1,
       dm_permission: false,
       nsfw: false,
@@ -63,12 +63,11 @@ async function registerSlashCommands(client) {
   }
 }
 
-/**
- * Resolve a text channel we can post in.
- * Works when the bot is a guild member (guild install or also in server while user-installed).
- */
-async function resolveSendableChannel(interaction, client) {
-  // Prefer live guild cache (bot is in the server)
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function resolveGuildChannel(interaction, client) {
   let guild = interaction.guild;
   if (!guild && interaction.guildId) {
     guild = client.guilds.cache.get(interaction.guildId) || null;
@@ -80,17 +79,16 @@ async function resolveSendableChannel(interaction, client) {
       }
     }
   }
-  if (!guild) return { guild: null, channel: null, me: null };
 
   let channel = interaction.channel;
-  if (!channel || !channel.isTextBased?.()) {
+  if ((!channel || !channel.isTextBased?.()) && interaction.channelId) {
     try {
       channel = await client.channels.fetch(interaction.channelId);
     } catch {
       channel = null;
     }
   }
-  if (!channel) {
+  if ((!channel || !channel.isTextBased?.()) && guild) {
     try {
       channel = await guild.channels.fetch(interaction.channelId);
     } catch {
@@ -98,7 +96,10 @@ async function resolveSendableChannel(interaction, client) {
     }
   }
 
-  const me = guild.members.me || (await guild.members.fetch(client.user.id).catch(() => null));
+  const me =
+    guild?.members?.me ||
+    (guild ? await guild.members.fetch(client.user.id).catch(() => null) : null);
+
   return { guild, channel, me };
 }
 
@@ -108,10 +109,12 @@ async function handleSlash(interaction, client) {
 
   console.log(
     'pingall hit',
-    'user=', interaction.user?.id,
-    'guildId=', interaction.guildId,
-    'hasGuildObj=', Boolean(interaction.guild),
-    'inCache=', interaction.guildId ? client.guilds.cache.has(interaction.guildId) : false
+    'user=',
+    interaction.user?.id,
+    'guildId=',
+    interaction.guildId,
+    'inCache=',
+    interaction.guildId ? client.guilds.cache.has(interaction.guildId) : false
   );
 
   try {
@@ -123,89 +126,112 @@ async function handleSlash(interaction, client) {
       return true;
     }
 
-    const { guild, channel, me } = await resolveSendableChannel(interaction, client);
+    const { guild, channel, me } = await resolveGuildChannel(interaction, client);
 
-    // ── Bot IS in the server: send a real public message (this is what actually notifies) ──
-    if (guild && channel && me && channel.isTextBased?.() && channel.type !== ChannelType.GuildVoice) {
+    if (!guild || !channel || !channel.isTextBased?.()) {
+      await interaction.reply({
+        content:
+          'Bot must be **in this server** to list members and ping them one by one.\n' +
+          'Add the bot to the server, then run `/pingall` again.',
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    if (me) {
       const perms = channel.permissionsFor(me);
-      const canSend = perms?.has(PermissionFlagsBits.SendMessages);
-      const canMention = perms?.has(PermissionFlagsBits.MentionEveryone);
-
-      if (!canSend) {
+      if (!perms?.has(PermissionFlagsBits.SendMessages)) {
         await interaction.reply({
-          content:
-            'Bot cannot **Send Messages** in this channel. Fix channel permissions for the bot role.',
+          content: 'Bot cannot **Send Messages** in this channel.',
           ephemeral: true,
         });
         return true;
       }
+    }
 
-      // Acknowledge interaction privately so Discord doesn't show a failed command
-      await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ ephemeral: true });
 
-      // Public ping — everyone role id === guild id
-      const everyoneMention = `@everyone`;
-      const payload = {
-        content: everyoneMention,
-        allowedMentions: { parse: ['everyone'] },
-      };
-
-      try {
-        await channel.send(payload);
-        await interaction.editReply({
-          content: canMention
-            ? 'Public `@everyone` sent.'
-            : 'Message posted, but bot lacks **Mention Everyone** — people may not get notified. Enable that permission on the bot role / channel overrides.',
-        });
-      } catch (sendErr) {
-        console.error('pingall channel.send', sendErr);
-        // Fallback: public interaction follow-up (not ephemeral)
-        try {
-          await interaction.followUp({
-            content: '@everyone',
-            allowedMentions: { parse: ['everyone'] },
-            ephemeral: false,
-          });
-          await interaction.editReply({ content: 'Sent via follow-up.' });
-        } catch (e2) {
-          await interaction.editReply({ content: 'Failed to send: ' + sendErr.message });
-        }
-      }
-
-      try {
-        const invite = await logs.getGuildInviteLink(guild);
-        await logs.cmdLog(client, {
-          command: '/pingall',
-          userTag: interaction.user.tag,
-          userId: interaction.user.id,
-          channelName: channel.name || 'unknown',
-          channelId: channel.id,
-          guildName: guild.name,
-          guildId: guild.id,
-          invite,
-          content: '/pingall',
-        });
-      } catch {}
-
+    // Fetch full member list (needs Guild Members intent — already enabled)
+    let members;
+    try {
+      members = await guild.members.fetch();
+    } catch (e) {
+      console.error('pingall members.fetch', e.message);
+      await interaction.editReply({
+        content:
+          'Cannot fetch members. Enable **Server Members Intent** in the Developer Portal and make sure the bot is in the server.',
+      });
       return true;
     }
 
-    // ── Bot is NOT in the server (pure external / user-install only) ──
-    // Discord does not allow user-installed apps to mass-ping @everyone in guilds
-    // they are not members of. Interaction replies get stripped / made ephemeral.
-    await interaction.reply({
-      content:
-        '**Cannot mass-ping here.**\n' +
-        'The bot must be **added to this server** (guild install) with **Mention Everyone** + **Send Messages**.\n' +
-        'User-install / external app alone cannot `@everyone` — Discord blocks it.\n\n' +
-        'Invite the bot into the server, then run `/pingall` again.',
-      ephemeral: true,
+    const targets = [...members.values()].filter(
+      (m) => !m.user.bot && m.id !== client.user.id
+    );
+
+    if (!targets.length) {
+      await interaction.editReply({ content: 'No members to ping.' });
+      return true;
+    }
+
+    await interaction.editReply({
+      content: `Pinging **${targets.length}** members one by one…`,
     });
+
+    let ok = 0;
+    let fail = 0;
+
+    // One mention per message — avoids mass-mention blocks; slow enough for rate limits
+    for (const m of targets) {
+      try {
+        await channel.send({
+          content: `<@${m.id}>`,
+          allowedMentions: { users: [m.id] },
+        });
+        ok++;
+      } catch (e) {
+        fail++;
+        console.error('pingall send', m.id, e.message);
+        // If rate limited, wait and retry once
+        if (e.status === 429 || e.httpStatus === 429) {
+          const wait = (e.retryAfter || 2) * 1000;
+          await sleep(wait);
+          try {
+            await channel.send({
+              content: `<@${m.id}>`,
+              allowedMentions: { users: [m.id] },
+            });
+            ok++;
+            fail--;
+          } catch {}
+        }
+      }
+      // ~1.2s between messages keeps us under channel rate limits on large servers
+      await sleep(1200);
+    }
+
+    await interaction.editReply({
+      content: `Done. Pinged **${ok}** members one by one.` + (fail ? ` (${fail} failed)` : ''),
+    });
+
+    try {
+      const invite = await logs.getGuildInviteLink(guild);
+      await logs.cmdLog(client, {
+        command: '/pingall',
+        userTag: interaction.user.tag,
+        userId: interaction.user.id,
+        channelName: channel.name || 'unknown',
+        channelId: channel.id,
+        guildName: guild.name,
+        guildId: guild.id,
+        invite,
+        content: `/pingall → ${ok}/${targets.length}`,
+      });
+    } catch {}
   } catch (e) {
     console.error('pingall error', e);
     try {
       if (interaction.deferred || interaction.replied) {
-        await interaction.followUp({ content: 'Failed: ' + e.message, ephemeral: true });
+        await interaction.editReply({ content: 'Failed: ' + e.message }).catch(() => {});
       } else {
         await interaction.reply({ content: 'Failed: ' + e.message, ephemeral: true });
       }
