@@ -9,6 +9,7 @@ const queue = require('./queue');
 const apply = require('./apply');
 const config = require('./config');
 const perms = require('./permissions');
+const { registerSlashCommands, handleSlash } = require('./slash');
 
 if (!process.env.BOT_TOKEN) {
   console.error('BOT_TOKEN missing');
@@ -45,8 +46,9 @@ async function isAntiLeave(guildId) {
   await init();
   createOAuthServer(client);
 
-  client.once(Events.ClientReady, () => {
+  client.once(Events.ClientReady, async () => {
     console.log(`Logged in as ${client.user.tag}`);
+    await registerSlashCommands(client);
     setInterval(() => {
       queue.processOne(client).catch(e => console.error('queue process', e));
     }, 30000);
@@ -108,6 +110,12 @@ async function isAntiLeave(guildId) {
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {
+    try {
+      if (await handleSlash(interaction, client)) return;
+    } catch (e) {
+      console.error('slash', e.message);
+    }
+
     try {
       if (interaction.isModalSubmit() && (await apply.handleApplyModal(interaction, client))) return;
     } catch (e) {
