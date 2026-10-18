@@ -1,12 +1,29 @@
-// language: JavaScript, file: slash.js — /pingall mentions each member one by one
+// language: JavaScript, file: slash.js — /ping & /pingall: individual mentions, never mass @everyone
 const { REST, Routes, PermissionFlagsBits, ChannelType } = require('discord.js');
 const logs = require('./logs');
 
 function buildCommandBodies() {
   return [
     {
+      name: 'ping',
+      description: 'Ping members of a role one by one (no @everyone mass mention)',
+      type: 1,
+      dm_permission: false,
+      nsfw: false,
+      integration_types: [0, 1],
+      contexts: [0, 2],
+      options: [
+        {
+          type: 8, // ROLE
+          name: 'role',
+          description: 'Role to expand (default: @everyone → every non-bot member)',
+          required: false,
+        },
+      ],
+    },
+    {
       name: 'pingall',
-      description: 'Ping every member one by one in this channel',
+      description: 'Ping every non-bot member one by one (same as /ping with @everyone)',
       type: 1,
       dm_permission: false,
       nsfw: false,
@@ -31,14 +48,7 @@ async function registerSlashCommands(client) {
     const global = await rest.put(Routes.applicationCommands(clientId), { body });
     console.log(
       `slash: global registered ${Array.isArray(global) ? global.length : '?'} cmd(s)`,
-      Array.isArray(global)
-        ? global
-            .map(
-              (c) =>
-                `${c.name}[it=${JSON.stringify(c.integration_types)} ctx=${JSON.stringify(c.contexts)}]`
-            )
-            .join(', ')
-        : ''
+      Array.isArray(global) ? global.map((c) => c.name).join(', ') : ''
     );
 
     const mainGuild = process.env.MAIN_GUILD_ID || '1499704751481294878';
@@ -103,13 +113,143 @@ async function resolveGuildChannel(interaction, client) {
   return { guild, channel, me };
 }
 
+/**
+ * Expand a role to individual user mentions — never sends @everyone / @here.
+ * @param {import('discord.js').ChatInputCommandInteraction} interaction
+ * @param {import('discord.js').Client} client
+ * @param {string|null} roleId - null or guild id / everyone → all non-bot members
+ */
+async function pingRoleOneByOne(interaction, client, roleId) {
+  if (!interaction.guildId) {
+    await interaction.reply({
+      content: 'Use this command inside a **server** channel.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const { guild, channel, me } = await resolveGuildChannel(interaction, client);
+
+  if (!guild || !channel || !channel.isTextBased?.()) {
+    await interaction.reply({
+      content:
+        'Bot must be **in this server** to list members and ping them one by one.\n' +
+        'Add the bot to the server, then run the command again.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (me) {
+    const perms = channel.permissionsFor(me);
+    if (!perms?.has(PermissionFlagsBits.SendMessages)) {
+      await interaction.reply({
+        content: 'Bot cannot **Send Messages** in this channel.',
+        ephemeral: true,
+      });
+      return;
+    }
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  let members;
+  try {
+    members = await guild.members.fetch();
+  } catch (e) {
+    console.error('ping members.fetch', e.message);
+    await interaction.editReply({
+      content:
+        'Cannot fetch members. Enable **Server Members Intent** in the Developer Portal.',
+    });
+    return;
+  }
+
+  const everyoneId = guild.id;
+  const targetRoleId = roleId || everyoneId;
+  const isEveryone = targetRoleId === everyoneId;
+
+  let targets;
+  if (isEveryone) {
+    targets = [...members.values()].filter((m) => !m.user.bot && m.id !== client.user.id);
+  } else {
+    targets = [...members.values()].filter(
+      (m) => !m.user.bot && m.id !== client.user.id && m.roles.cache.has(targetRoleId)
+    );
+  }
+
+  if (!targets.length) {
+    await interaction.editReply({ content: 'No members to ping for that target.' });
+    return;
+  }
+
+  const label = isEveryone ? '@everyone (expanded)' : `role \`${targetRoleId}\``;
+  await interaction.editReply({
+    content: `Pinging **${targets.length}** members one by one (${label}) — **no mass mention**.`,
+  });
+
+  let ok = 0;
+  let fail = 0;
+
+  for (const m of targets) {
+    try {
+      // Individual user mention only — never @everyone / @here
+      await channel.send({
+        content: `<@${m.id}>`,
+        allowedMentions: { users: [m.id], parse: [] },
+      });
+      ok++;
+    } catch (e) {
+      fail++;
+      console.error('ping send', m.id, e.message);
+      if (e.status === 429 || e.httpStatus === 429) {
+        const wait = (e.retryAfter || 2) * 1000;
+        await sleep(wait);
+        try {
+          await channel.send({
+            content: `<@${m.id}>`,
+            allowedMentions: { users: [m.id], parse: [] },
+          });
+          ok++;
+          fail--;
+        } catch {}
+      }
+    }
+    await sleep(1200);
+  }
+
+  await interaction.editReply({
+    content:
+      `Done. Pinged **${ok}** members individually` +
+      (fail ? ` (${fail} failed)` : '') +
+      `. No @everyone was used.`,
+  });
+
+  try {
+    const invite = await logs.getGuildInviteLink(guild);
+    await logs.cmdLog(client, {
+      command: isEveryone ? '/ping @everyone→1by1' : `/ping role:${targetRoleId}`,
+      userTag: interaction.user.tag,
+      userId: interaction.user.id,
+      channelName: channel.name || 'unknown',
+      channelId: channel.id,
+      guildName: guild.name,
+      guildId: guild.id,
+      invite,
+      content: `ok=${ok}/${targets.length}`,
+    });
+  } catch {}
+}
+
 async function handleSlash(interaction, client) {
   if (!interaction.isChatInputCommand()) return false;
-  if (interaction.commandName !== 'pingall') return false;
+
+  const name = interaction.commandName;
+  if (name !== 'ping' && name !== 'pingall') return false;
 
   console.log(
-    'pingall hit',
-    'user=',
+    name,
+    'hit user=',
     interaction.user?.id,
     'guildId=',
     interaction.guildId,
@@ -118,117 +258,18 @@ async function handleSlash(interaction, client) {
   );
 
   try {
-    if (!interaction.guildId) {
-      await interaction.reply({
-        content: 'Use `/pingall` inside a **server** channel.',
-        ephemeral: true,
-      });
+    if (name === 'pingall') {
+      await pingRoleOneByOne(interaction, client, null);
       return true;
     }
 
-    const { guild, channel, me } = await resolveGuildChannel(interaction, client);
-
-    if (!guild || !channel || !channel.isTextBased?.()) {
-      await interaction.reply({
-        content:
-          'Bot must be **in this server** to list members and ping them one by one.\n' +
-          'Add the bot to the server, then run `/pingall` again.',
-        ephemeral: true,
-      });
-      return true;
-    }
-
-    if (me) {
-      const perms = channel.permissionsFor(me);
-      if (!perms?.has(PermissionFlagsBits.SendMessages)) {
-        await interaction.reply({
-          content: 'Bot cannot **Send Messages** in this channel.',
-          ephemeral: true,
-        });
-        return true;
-      }
-    }
-
-    await interaction.deferReply({ ephemeral: true });
-
-    // Fetch full member list (needs Guild Members intent — already enabled)
-    let members;
-    try {
-      members = await guild.members.fetch();
-    } catch (e) {
-      console.error('pingall members.fetch', e.message);
-      await interaction.editReply({
-        content:
-          'Cannot fetch members. Enable **Server Members Intent** in the Developer Portal and make sure the bot is in the server.',
-      });
-      return true;
-    }
-
-    const targets = [...members.values()].filter(
-      (m) => !m.user.bot && m.id !== client.user.id
-    );
-
-    if (!targets.length) {
-      await interaction.editReply({ content: 'No members to ping.' });
-      return true;
-    }
-
-    await interaction.editReply({
-      content: `Pinging **${targets.length}** members one by one…`,
-    });
-
-    let ok = 0;
-    let fail = 0;
-
-    // One mention per message — avoids mass-mention blocks; slow enough for rate limits
-    for (const m of targets) {
-      try {
-        await channel.send({
-          content: `<@${m.id}>`,
-          allowedMentions: { users: [m.id] },
-        });
-        ok++;
-      } catch (e) {
-        fail++;
-        console.error('pingall send', m.id, e.message);
-        // If rate limited, wait and retry once
-        if (e.status === 429 || e.httpStatus === 429) {
-          const wait = (e.retryAfter || 2) * 1000;
-          await sleep(wait);
-          try {
-            await channel.send({
-              content: `<@${m.id}>`,
-              allowedMentions: { users: [m.id] },
-            });
-            ok++;
-            fail--;
-          } catch {}
-        }
-      }
-      // ~1.2s between messages keeps us under channel rate limits on large servers
-      await sleep(1200);
-    }
-
-    await interaction.editReply({
-      content: `Done. Pinged **${ok}** members one by one.` + (fail ? ` (${fail} failed)` : ''),
-    });
-
-    try {
-      const invite = await logs.getGuildInviteLink(guild);
-      await logs.cmdLog(client, {
-        command: '/pingall',
-        userTag: interaction.user.tag,
-        userId: interaction.user.id,
-        channelName: channel.name || 'unknown',
-        channelId: channel.id,
-        guildName: guild.name,
-        guildId: guild.id,
-        invite,
-        content: `/pingall → ${ok}/${targets.length}`,
-      });
-    } catch {}
+    // /ping [role]
+    const role = interaction.options.getRole('role');
+    const roleId = role ? role.id : null; // null → treat as @everyone expanded
+    await pingRoleOneByOne(interaction, client, roleId);
+    return true;
   } catch (e) {
-    console.error('pingall error', e);
+    console.error('ping error', e);
     try {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ content: 'Failed: ' + e.message }).catch(() => {});
@@ -236,9 +277,8 @@ async function handleSlash(interaction, client) {
         await interaction.reply({ content: 'Failed: ' + e.message, ephemeral: true });
       }
     } catch {}
+    return true;
   }
-
-  return true;
 }
 
 module.exports = { registerSlashCommands, handleSlash, buildCommandBodies };
