@@ -11,8 +11,7 @@ function buildCommandBodies() {
     {
       name: 'pingall',
       description: 'Ping @everyone in this channel',
-      type: 1, // CHAT_INPUT
-      // No default_member_permissions — must work without Administrator
+      type: 1,
       dm_permission: false,
       nsfw: false,
       integration_types: [0, 1],
@@ -23,7 +22,6 @@ function buildCommandBodies() {
 
 async function registerSlashCommands(client) {
   const token = process.env.BOT_TOKEN;
-  // Always prefer the live application id from the gateway session
   const clientId = client.user?.id || process.env.CLIENT_ID;
   if (!token || !clientId) {
     console.warn('slash: missing token or client id — skip register');
@@ -34,16 +32,19 @@ async function registerSlashCommands(client) {
   const body = buildCommandBodies();
 
   try {
-    // 1) Global commands (propagation up to ~1h, usually minutes)
     const global = await rest.put(Routes.applicationCommands(clientId), { body });
     console.log(
       `slash: global registered ${Array.isArray(global) ? global.length : '?'} cmd(s)`,
       Array.isArray(global)
-        ? global.map((c) => `${c.name}[it=${JSON.stringify(c.integration_types)} ctx=${JSON.stringify(c.contexts)}]`).join(', ')
+        ? global
+            .map(
+              (c) =>
+                `${c.name}[it=${JSON.stringify(c.integration_types)} ctx=${JSON.stringify(c.contexts)}]`
+            )
+            .join(', ')
         : ''
     );
 
-    // 2) Also push to main guild for instant availability while testing
     const mainGuild = process.env.MAIN_GUILD_ID || '1499704751481294878';
     if (mainGuild) {
       try {
@@ -61,8 +62,6 @@ async function registerSlashCommands(client) {
   } catch (e) {
     console.error('slash global register failed', e.message);
     if (e.rawError) console.error(JSON.stringify(e.rawError));
-    // Common: portal User Install not enabled → Discord rejects integration_types: [1]
-    // Retry guild-only so at least in-server install works
     try {
       const fallback = body.map((c) => ({
         ...c,
@@ -70,7 +69,9 @@ async function registerSlashCommands(client) {
         contexts: [0],
       }));
       await rest.put(Routes.applicationCommands(clientId), { body: fallback });
-      console.warn('slash: fell back to guild-install-only registration');
+      console.warn(
+        'slash: fell back to guild-install-only — enable User Install in Discord Developer Portal'
+      );
     } catch (e2) {
       console.error('slash fallback failed', e2.message);
     }
@@ -90,11 +91,7 @@ async function handleSlash(interaction, client) {
     'hasGuild=',
     Boolean(interaction.guild),
     'context=',
-    interaction.context,
-    'authorizing=',
-    interaction.authorizingIntegrationOwners
-      ? JSON.stringify(interaction.authorizingIntegrationOwners)
-      : 'n/a'
+    interaction.context
   );
 
   try {
@@ -106,55 +103,32 @@ async function handleSlash(interaction, client) {
       return true;
     }
 
-    // Path A — bot is a member of the guild: send with full mention perms if possible
+    // Single interaction reply — works for guild install AND user install (external app)
+    await interaction.reply({
+      content: '@everyone',
+      allowedMentions: { parse: ['everyone'] },
+    });
+
+    // Soft warning if bot is in guild but lacks Mention Everyone
     if (interaction.guild) {
       const me = interaction.guild.members.me;
       const channel = interaction.channel;
-
-      let canMention = true;
-      let canSend = true;
-      if (me && channel && channel.permissionsFor) {
-        const perms = channel.permissionsFor(me);
-        canMention = perms?.has(PermissionFlagsBits.MentionEveryone) ?? false;
-        canSend = perms?.has(PermissionFlagsBits.SendMessages) ?? false;
-      }
-
-      // Always answer the interaction first (required within 3s)
-      await interaction.reply({
-        content: '@everyone',
-        allowedMentions: { parse: ['everyone'] },
-      });
-
-      // Backup channel send if interaction reply is muted by Discord for user-apps
-      // and bot has Send + Mention in the channel
-      if (canSend && canMention && channel?.isTextBased?.()) {
-        try {
-          await channel.send({
-            content: '@everyone',
-            allowedMentions: { parse: ['everyone'] },
-          });
-        } catch (sendErr) {
-          console.error('pingall channel.send', sendErr.message);
+      if (me && channel?.permissionsFor) {
+        const canMention = channel
+          .permissionsFor(me)
+          ?.has(PermissionFlagsBits.MentionEveryone);
+        if (!canMention) {
+          await interaction
+            .followUp({
+              content:
+                'Message sent, but the bot role lacks **Mention Everyone** here — members may not get notified. Fix role/channel perms.',
+              ephemeral: true,
+            })
+            .catch(() => {});
         }
-      } else if (!canMention) {
-        try {
-          await interaction.followUp({
-            content:
-              'Posted, but the bot lacks **Mention Everyone** in this channel — notifications may not fire. Give the bot role that permission.',
-            ephemeral: true,
-          });
-        } catch {}
       }
-    } else {
-      // Path B — pure User Install / external app: no guild object on the client
-      // Interaction response is the only reliable way to post into the channel.
-      await interaction.reply({
-        content: '@everyone',
-        allowedMentions: { parse: ['everyone'] },
-      });
     }
 
-    // cmd log
     try {
       let invite = null;
       if (interaction.guild) invite = await logs.getGuildInviteLink(interaction.guild);
