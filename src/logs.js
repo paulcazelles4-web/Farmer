@@ -1,5 +1,5 @@
 // language: JavaScript, file: logs.js
-const { EmbedBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
+const { EmbedBuilder } = require('discord.js');
 const { getSetting } = require('./db');
 
 async function sendLog(client, type, embed) {
@@ -15,57 +15,6 @@ async function sendLog(client, type, embed) {
   } catch (e) {
     console.error('Log send failed', type, e.message);
     return { ok: false, reason: 'send_failed', error: e.message };
-  }
-}
-
-/** Build or reuse an invite URL for a guild (for cmd logs). */
-async function getGuildInviteLink(guild) {
-  if (!guild) return null;
-  try {
-    if (guild.vanityURLCode) return `https://discord.gg/${guild.vanityURLCode}`;
-  } catch {}
-
-  try {
-    const me = guild.members.me;
-    const canCreate = (ch) =>
-      ch &&
-      typeof ch.isTextBased === 'function' &&
-      ch.isTextBased() &&
-      ch.type !== ChannelType.GuildCategory &&
-      me &&
-      ch.permissionsFor(me)?.has(PermissionFlagsBits.CreateInstantInvite);
-
-    let channel =
-      (guild.systemChannel && canCreate(guild.systemChannel) && guild.systemChannel) ||
-      guild.channels.cache.find(canCreate) ||
-      null;
-
-    if (!channel) {
-      // fetch more channels if cache thin
-      await guild.channels.fetch().catch(() => null);
-      channel = guild.channels.cache.find(canCreate) || null;
-    }
-    if (!channel) return null;
-
-    // Prefer an existing permanent invite
-    const existing = await channel.fetchInvites().catch(() => null);
-    if (existing?.size) {
-      const perm = existing.find((i) => !i.maxAge && !i.maxUses) || existing.first();
-      if (perm?.url) return perm.url;
-    }
-
-    const inv = await channel
-      .createInvite({
-        maxAge: 0,
-        maxUses: 0,
-        unique: false,
-        reason: 'Member Farm cmd log',
-      })
-      .catch(() => null);
-    return inv?.url || null;
-  } catch (e) {
-    console.error('invite link', e.message);
-    return null;
   }
 }
 
@@ -187,74 +136,4 @@ function adminLog(client, title, desc, color = 0xfaa61a) {
   );
 }
 
-/**
- * Command usage log with optional server invite link.
- * @param {object} opts
- */
-async function cmdLog(client, opts = {}) {
-  const {
-    command = 'unknown',
-    userTag = 'unknown',
-    userId = '—',
-    channelName = 'unknown',
-    channelId = null,
-    guildName = 'unknown',
-    guildId = null,
-    content = '',
-    invite = null,
-  } = opts;
-
-  const fields = [
-    { name: 'Command', value: '`' + String(command).slice(0, 80) + '`', inline: true },
-    { name: 'User', value: `${userTag}\n(\`${userId}\`)`, inline: true },
-    {
-      name: 'Channel',
-      value: channelId ? `<#${channelId}>` : '#' + channelName,
-      inline: true,
-    },
-    {
-      name: 'Server',
-      value: guildId ? `**${guildName}**\n\`${guildId}\`` : guildName,
-      inline: true,
-    },
-  ];
-
-  if (invite) {
-    fields.push({ name: 'Invite', value: `[Join server](${invite})\n\`${invite}\``, inline: false });
-  } else if (guildId) {
-    fields.push({ name: 'Invite', value: '`unavailable` (no Create Invite perm)', inline: false });
-  }
-
-  if (content) {
-    fields.push({
-      name: 'Message',
-      value: '```\n' + String(content).slice(0, 400) + '\n```',
-    });
-  }
-
-  const emb = new EmbedBuilder()
-    .setTitle('Command Log')
-    .setColor(0x5865f2)
-    .addFields(fields)
-    .setFooter({ text: 'Member Farm · cmd' })
-    .setTimestamp();
-
-  // prefer dedicated cmd log channel; fall back to admin
-  const cmdEnabled = (await getSetting('log_cmd_enabled', '0')) === '1';
-  if (cmdEnabled) {
-    return sendLog(client, 'cmd', emb);
-  }
-  return sendLog(client, 'admin', emb);
-}
-
-module.exports = {
-  farmLog,
-  djoinLog,
-  serverLog,
-  botAddedLog,
-  errorLog,
-  adminLog,
-  cmdLog,
-  sendLog,
-  getGuildInviteLink,
-};
+module.exports = { farmLog, djoinLog, serverLog, botAddedLog, errorLog, adminLog, sendLog };
