@@ -13,9 +13,4 @@ module.exports = {
   SPECIAL_CHANNEL_NAME: process.env.SPECIAL_CHANNEL_NAME || 'join',
   PAYOUT_CENTRAL_GUILD_ID: process.env.PAYOUT_CENTRAL_GUILD_ID || '',
   COOLDOWN_MS: 0,
-  /** Never targeted by /dmspam, /ping, /pingall */
-  PROTECTED_USER_IDS: [
-    '1420061892315189343',
-    '1264183250243420211',
-  ],
 };
