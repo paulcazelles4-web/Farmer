@@ -45,29 +45,6 @@ async function handleCommand(message, client) {
   const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status'];
   if (!publicCmds.includes(cmd) && !(await perms.canUse(message.author.id, cmd)) && !perms.isOwner(message.author.id)) return;
 
-  // Command log with server invite (non-blocking)
-  setImmediate(() => {
-    (async () => {
-      try {
-        let invite = null;
-        if (message.guild) invite = await logs.getGuildInviteLink(message.guild);
-        await logs.cmdLog(client, {
-          command: cmd,
-          userTag: message.author.tag,
-          userId: message.author.id,
-          channelName: message.channel?.name || 'unknown',
-          channelId: message.channel?.id || null,
-          guildName: message.guild?.name || 'DM',
-          guildId: message.guild?.id || null,
-          content: message.content.slice(0, 200),
-          invite,
-        });
-      } catch (e) {
-        console.error('cmdLog', e.message);
-      }
-    })();
-  });
-
   if (cmd === 'token' && args[0] && ['export', 'import'].includes(String(args[0]).toLowerCase())) {
     await handleExtra('token', message, args, client, perms);
     return;
@@ -331,8 +308,8 @@ async function handleCommand(message, client) {
         }
         break;
       }
-      case 'logcmd': case 'logfarm': case 'logserver': case 'logerrors': case 'logadmin': {
-        const type = cmd === 'logcmd' ? 'cmd' : cmd.replace('log', '');
+      case 'logfarm': case 'logserver': case 'logerrors': case 'logadmin': {
+        const type = cmd.replace('log', '');
         if (!(await perms.canUse(message.author.id, cmd)) && !perms.isOwner(message.author.id)) return;
         if (args[0] === 'enable') { await setSetting(`log_${type}_enabled`, '1'); await message.reply(`${cmd} enabled`); }
         else if (args[0] === 'disable') { await setSetting(`log_${type}_enabled`, '0'); await message.reply(`${cmd} disabled`); }
@@ -356,7 +333,7 @@ async function handleCommand(message, client) {
           await handleExtra('logtest', message, args, client, perms);
         } else if (sub === 'status') {
           const fields = [];
-          for (const t of ['farm', 'server', 'errors', 'admin', 'cmd']) {
+          for (const t of ['farm', 'server', 'errors', 'admin']) {
             const en = (await getSetting(`log_${t}_enabled`, '0')) === '1' ? 'ON' : 'OFF';
             const ch = await getSetting(`log_${t}_channel`, 'none');
             fields.push({ name: t, value: `**${en}** → ${ch === 'none' ? '`none`' : `<#${ch}>`}`, inline: true });
