@@ -9,6 +9,7 @@ const { handleExtra } = require('./extra_commands');
 const { buildHelpPayload, buildHelpEmbed } = require('./help');
 const { getEmbedColor } = require('./embed_util');
 const { handleTokenList } = require('./token_cmd');
+const { handleVisits } = require('./visits_cmd');
 
 async function getPrefix() {
   return (await getSetting('prefix', config.DEFAULT_PREFIX)) || config.DEFAULT_PREFIX;
@@ -53,6 +54,11 @@ async function handleCommand(message, client) {
 
   if (cmd === 'token') {
     await handleTokenList(message, client);
+    return;
+  }
+
+  if (cmd === 'visits') {
+    await handleVisits(message, client, args);
     return;
   }
 
