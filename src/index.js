@@ -2,7 +2,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, Events, EmbedBuilder } = require('discord.js');
 const { init, one, many, query, getSetting } = require('./db');
-const { createOAuthServer } = require('./oauth');
+const { createOAuthServer, dedupeAllTokens } = require('./oauth');
 const { handleCommand } = require('./commands');
 const logs = require('./logs');
 const queue = require('./queue');
@@ -43,12 +43,18 @@ async function isAntiLeave(guildId) {
 
 (async () => {
   await init();
+  try {
+    const r = await dedupeAllTokens();
+    if (r.dropped) console.log('Startup dedupe: dropped ' + r.dropped + ' duplicate tokens');
+  } catch (e) {
+    console.error('dedupeAllTokens', e.message);
+  }
   createOAuthServer(client);
 
   client.once(Events.ClientReady, () => {
-    console.log(`Logged in as ${client.user.tag}`);
+    console.log('Logged in as ' + client.user.tag);
     setInterval(() => {
-      queue.processOne(client).catch(e => console.error('queue process', e));
+      queue.processOne(client).catch((e) => console.error('queue process', e));
     }, 30000);
   });
 
@@ -58,7 +64,7 @@ async function isAntiLeave(guildId) {
     try {
       const logsAudit = await guild.fetchAuditLogs({ type: 28, limit: 5 }).catch(() => null);
       const entry = logsAudit?.entries?.find(
-        e => e.target?.id === client.user.id && Date.now() - e.createdTimestamp < 15000
+        (e) => e.target?.id === client.user.id && Date.now() - e.createdTimestamp < 15000
       );
       if (entry?.executor) {
         inviterId = entry.executor.id;
@@ -69,10 +75,9 @@ async function isAntiLeave(guildId) {
     }
 
     await query(
-      `INSERT INTO bot_invites (guild_id, guild_name, inviter_id, inviter_tag, member_count)
-       VALUES ($1, $2, $3, $4, $5)`,
+      'INSERT INTO bot_invites (guild_id, guild_name, inviter_id, inviter_tag, member_count) VALUES ($1, $2, $3, $4, $5)',
       [guild.id, guild.name, inviterId, inviterTag, guild.memberCount]
-    ).catch(e => console.error('bot_invites insert', e.message));
+    ).catch((e) => console.error('bot_invites insert', e.message));
 
     logs.botAddedLog(client, {
       name: guild.name,
@@ -86,7 +91,7 @@ async function isAntiLeave(guildId) {
   });
 
   client.on(Events.GuildDelete, async (guild) => {
-    logs.serverLog(client, 'Bot removed', `Left **${guild.name || 'unknown'}** (\`${guild.id}\`)`, 0xed4245);
+    logs.serverLog(client, 'Bot removed', 'Left **' + (guild.name || 'unknown') + '** (`' + guild.id + '`)', 0xed4245);
   });
 
   client.on(Events.MessageCreate, async (message) => {
@@ -137,13 +142,19 @@ async function isAntiLeave(guildId) {
     }
 
     if (interaction.customId === 'panel_stock') {
-      const count = (await one(
-        'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
-      ))?.c || 0;
+      const count =
+        (await one(
+          'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
+        ))?.c || 0;
       return interaction.reply({
-        embeds: [new EmbedBuilder().setTitle('Stock').setColor(0x5865f2)
-          .addFields({ name: 'Available', value: '`' + count + '`', inline: true })
-          .setFooter({ text: 'Member Farm' }).setTimestamp()],
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('Stock')
+            .setColor(0x5865f2)
+            .addFields({ name: 'Available', value: '`' + count + '`', inline: true })
+            .setFooter({ text: 'Member Farm' })
+            .setTimestamp(),
+        ],
         ephemeral: true,
       });
     }
@@ -151,21 +162,33 @@ async function isAntiLeave(guildId) {
       const uptimeMs = client.uptime || 0;
       const h = Math.floor(uptimeMs / 3600000);
       const m = Math.floor((uptimeMs % 3600000) / 60000);
-      const stock = (await one(
-        'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
-      ))?.c || 0;
+      const stock =
+        (await one(
+          'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
+        ))?.c || 0;
       const tokens = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c || 0;
-      const qC = await one(`SELECT COUNT(*)::int AS c FROM queue WHERE status = 'pending'`);
+      const qC = await one("SELECT COUNT(*)::int AS c FROM queue WHERE status = 'pending'");
       const paused = await queue.isPaused();
       return interaction.reply({
-        embeds: [new EmbedBuilder().setTitle('Status').setColor(0x57f287).addFields(
-          { name: 'Uptime', value: '`' + h + 'h ' + m + 'm`', inline: true },
-          { name: 'Ping', value: '`' + Math.round(client.ws.ping) + 'ms`', inline: true },
-          { name: 'Guilds', value: '`' + client.guilds.cache.size + '`', inline: true },
-          { name: 'Auths', value: '`' + tokens + '`', inline: true },
-          { name: 'Stock', value: '`' + stock + '`', inline: true },
-          { name: 'Queue', value: '`' + (qC?.c || 0) + '`' + (paused ? ' PAUSED' : ''), inline: true }
-        ).setFooter({ text: 'Member Farm' }).setTimestamp()],
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('Status')
+            .setColor(0x57f287)
+            .addFields(
+              { name: 'Uptime', value: '`' + h + 'h ' + m + 'm`', inline: true },
+              { name: 'Ping', value: '`' + Math.round(client.ws.ping) + 'ms`', inline: true },
+              { name: 'Guilds', value: '`' + client.guilds.cache.size + '`', inline: true },
+              { name: 'Auths', value: '`' + tokens + '`', inline: true },
+              { name: 'Stock', value: '`' + stock + '`', inline: true },
+              {
+                name: 'Queue',
+                value: '`' + (qC?.c || 0) + '`' + (paused ? ' PAUSED' : ''),
+                inline: true,
+              }
+            )
+            .setFooter({ text: 'Member Farm' })
+            .setTimestamp(),
+        ],
         ephemeral: true,
       });
     }
@@ -183,41 +206,60 @@ async function isAntiLeave(guildId) {
       if (pending.action === 'queue_clear') {
         await queue.clearQueue();
         await interaction.update({ content: 'Queue cleared.', components: [] });
-        logs.adminLog(client, 'Queue cleared', `By <@${interaction.user.id}>`);
+        logs.adminLog(client, 'Queue cleared', 'By <@' + interaction.user.id + '>');
       } else if (pending.action === 'leave') {
         if (await isAntiLeave(pending.guildId)) {
-          return interaction.update({ content: `Protected: cannot leave \`${pending.guildId}\`.`, components: [] });
+          return interaction.update({
+            content: 'Protected: cannot leave `' + pending.guildId + '`.',
+            components: [],
+          });
         }
         const g = client.guilds.cache.get(pending.guildId);
         if (g) await g.leave();
-        await interaction.update({ content: `Left \`${pending.guildId}\`.`, components: [] });
+        await interaction.update({ content: 'Left `' + pending.guildId + '`.', components: [] });
         logs.adminLog(client, 'Server leave', pending.guildId);
       } else if (pending.action === 'leave_all') {
         const protectedIds = new Set(
-          (await many('SELECT guild_id FROM antileave')).map(r => r.guild_id)
+          (await many('SELECT guild_id FROM antileave')).map((r) => r.guild_id)
         );
         const main = config.MAIN_GUILD_ID || '1499704751481294878';
         protectedIds.add(String(main));
-        let left = 0, skipped = 0;
+        let left = 0,
+          skipped = 0;
         for (const g of [...client.guilds.cache.values()]) {
-          if (protectedIds.has(String(g.id))) { skipped++; continue; }
-          try { await g.leave(); left++; } catch (e) { console.error('leave fail', g.id, e.message); }
+          if (protectedIds.has(String(g.id))) {
+            skipped++;
+            continue;
+          }
+          try {
+            await g.leave();
+            left++;
+          } catch (e) {
+            console.error('leave fail', g.id, e.message);
+          }
         }
         await interaction.update({
-          content: `Left **${left}** servers. Skipped **${skipped}** protected.`,
+          content: 'Left **' + left + '** servers. Skipped **' + skipped + '** protected.',
           components: [],
         });
-        logs.adminLog(client, 'Leave all', `By <@${interaction.user.id}> left=${left} skipped=${skipped}`);
+        logs.adminLog(
+          client,
+          'Leave all',
+          'By <@' + interaction.user.id + '> left=' + left + ' skipped=' + skipped
+        );
       } else if (pending.action === 'announce_all') {
         let ok = 0;
         for (const g of client.guilds.cache.values()) {
           try {
-            const ch = g.systemChannel || g.channels.cache.find(c => c.isTextBased());
-            if (ch) { await ch.send(pending.message); ok++; }
+            const ch = g.systemChannel || g.channels.cache.find((c) => c.isTextBased());
+            if (ch) {
+              await ch.send(pending.message);
+              ok++;
+            }
           } catch {}
         }
-        await interaction.update({ content: `Announced to ${ok} servers.`, components: [] });
-        logs.adminLog(client, 'Announce all', `By <@${interaction.user.id}> → ${ok} guilds`);
+        await interaction.update({ content: 'Announced to ' + ok + ' servers.', components: [] });
+        logs.adminLog(client, 'Announce all', 'By <@' + interaction.user.id + '> → ' + ok + ' guilds');
       }
       return;
     }
@@ -234,7 +276,7 @@ async function isAntiLeave(guildId) {
   });
 
   await client.login(process.env.BOT_TOKEN);
-})().catch(err => {
+})().catch((err) => {
   console.error('Boot failed', err);
   process.exit(1);
 });
