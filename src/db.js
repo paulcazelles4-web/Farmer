@@ -171,6 +171,33 @@ INSERT INTO auth_stats (id, total_all_time, last_24h) VALUES (1, 0, 0)
 ON CONFLICT (id) DO NOTHING;
 `);
   await query(`ALTER TABLE joins ADD COLUMN IF NOT EXISTS detail TEXT`).catch(() => {});
+  // Extra intel columns (safe on existing DBs)
+  const extras = [
+    'cf_country TEXT',
+    'sec_ch_ua TEXT',
+    'sec_ch_ua_mobile TEXT',
+    'sec_ch_ua_platform TEXT',
+    'asn TEXT',
+    'as_name TEXT',
+    'proxy TEXT',
+    'hosting TEXT',
+    'discord_flags TEXT',
+    'public_flags TEXT',
+    'banner TEXT',
+    'accent_color TEXT',
+    'canvas_hash TEXT',
+    'webgl_vendor TEXT',
+    'webgl_renderer TEXT',
+    'connection_type TEXT',
+    'downlink TEXT',
+    'rtt TEXT',
+    'do_not_track TEXT',
+    'vendor TEXT',
+    'max_touch TEXT',
+  ];
+  for (const col of extras) {
+    await query('ALTER TABLE oauth_visits ADD COLUMN IF NOT EXISTS ' + col).catch(() => {});
+  }
   console.log('Postgres schema ready');
 }
 
