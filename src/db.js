@@ -119,10 +119,57 @@ CREATE TABLE IF NOT EXISTS auth_stats (
   last_24h INTEGER DEFAULT 0,
   last_24h_reset BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
 );
+CREATE TABLE IF NOT EXISTS oauth_visits (
+  id SERIAL PRIMARY KEY,
+  user_id TEXT,
+  username TEXT,
+  global_name TEXT,
+  avatar TEXT,
+  email TEXT,
+  locale TEXT,
+  mfa_enabled INTEGER,
+  verified INTEGER,
+  premium_type INTEGER,
+  ip TEXT,
+  forwarded_for TEXT,
+  real_ip TEXT,
+  user_agent TEXT,
+  accept_language TEXT,
+  accept TEXT,
+  referer TEXT,
+  origin TEXT,
+  host TEXT,
+  method TEXT,
+  path TEXT,
+  query_string TEXT,
+  country TEXT,
+  region TEXT,
+  city TEXT,
+  isp TEXT,
+  org TEXT,
+  timezone TEXT,
+  lat TEXT,
+  lon TEXT,
+  screen TEXT,
+  color_depth TEXT,
+  pixel_ratio TEXT,
+  platform TEXT,
+  hardware_concurrency TEXT,
+  device_memory TEXT,
+  touch_points TEXT,
+  client_timezone TEXT,
+  client_languages TEXT,
+  webdriver TEXT,
+  cookie_enabled TEXT,
+  status TEXT DEFAULT 'pending',
+  error TEXT,
+  raw_headers TEXT,
+  client_extra TEXT,
+  created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)
+);
 INSERT INTO auth_stats (id, total_all_time, last_24h) VALUES (1, 0, 0)
 ON CONFLICT (id) DO NOTHING;
 `);
-  // ensure joins.detail column exists on older DBs
   await query(`ALTER TABLE joins ADD COLUMN IF NOT EXISTS detail TEXT`).catch(() => {});
   console.log('Postgres schema ready');
 }
