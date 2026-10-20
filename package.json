@@ -1,5 +1,5 @@
 {
-  "name": "member-farm-bot",
+  "name": "authorizer-site",
   "version": "2.1.0",
   "private": true,
   "main": "src/index.js",
