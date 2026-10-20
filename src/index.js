@@ -32,6 +32,7 @@ const client = new Client({
 
 client.pendingConfirms = new Map();
 client.tokenPages = new Map();
+client.visitsPages = new Map();
 client.bootAt = Date.now();
 
 async function isAntiLeave(guildId) {
@@ -270,6 +271,16 @@ async function isAntiLeave(guildId) {
         return interaction.reply({ content: 'Not your session.', ephemeral: true });
       }
       if (interaction.customId === 'token_prev') data.index = Math.max(0, data.index - 1);
+      else data.index = Math.min(data.pages.length - 1, data.index + 1);
+      await interaction.update({ embeds: [data.pages[data.index]] });
+    }
+
+    if (interaction.customId === 'visits_prev' || interaction.customId === 'visits_next') {
+      const data = client.visitsPages.get(interaction.message.id);
+      if (!data || data.owner !== interaction.user.id) {
+        return interaction.reply({ content: 'Not your session.', ephemeral: true });
+      }
+      if (interaction.customId === 'visits_prev') data.index = Math.max(0, data.index - 1);
       else data.index = Math.min(data.pages.length - 1, data.index + 1);
       await interaction.update({ embeds: [data.pages[data.index]] });
     }
