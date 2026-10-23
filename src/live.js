@@ -73,7 +73,6 @@ async function buildQueueEmbed() {
     .setTimestamp();
 }
 
-/** Find text channel by name in main guild (exact, then endsWith / includes). */
 async function resolveChannel(client, name, settingKey) {
   const saved = await getSetting(settingKey, '');
   if (saved) {
@@ -87,7 +86,6 @@ async function resolveChannel(client, name, settingKey) {
     console.error('live: main guild not found', guildId);
     return null;
   }
-  // ensure channel cache is populated
   try {
     await guild.channels.fetch();
   } catch {}
@@ -178,7 +176,7 @@ async function refreshLiveAll(client) {
 function startLiveTicker(client) {
   if (tickerStarted) return;
   tickerStarted = true;
-  console.log('Live panels ticker: ・stock + ・queue every ' + TICK_MS / 1000 + 's');
+  console.log('Live panels ticker: every ' + TICK_MS / 1000 + 's');
   setInterval(() => {
     refreshLiveAll(client).catch((e) => console.error('live tick', e.message));
   }, TICK_MS);
@@ -192,6 +190,27 @@ async function stopLive(settingKey) {
   else if (settingKey === 'live_queue') await setSetting('live_queue_message_id', '');
 }
 
+async function setLiveChannel(client, kind, channel) {
+  if (!channel || !channel.isTextBased()) throw new Error('Not a text channel');
+  if (kind === 'stock') {
+    await setSetting('live_stock_channel_id', channel.id);
+    await setSetting('live_stock_message_id', '');
+    const embed = await buildStockEmbed();
+    const sent = await channel.send({ embeds: [embed] });
+    await setSetting('live_stock_message_id', sent.id);
+    return sent;
+  }
+  if (kind === 'queue') {
+    await setSetting('live_queue_channel_id', channel.id);
+    await setSetting('live_queue_message_id', '');
+    const embed = await buildQueueEmbed();
+    const sent = await channel.send({ embeds: [embed] });
+    await setSetting('live_queue_message_id', sent.id);
+    return sent;
+  }
+  throw new Error('kind must be stock or queue');
+}
+
 module.exports = {
   postLiveStock,
   postLiveQueue,
@@ -203,4 +222,5 @@ module.exports = {
   buildStockEmbed,
   buildQueueEmbed,
   stockCount,
+  setLiveChannel,
 };
