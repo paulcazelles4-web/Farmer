@@ -1,8 +1,10 @@
 // language: JavaScript, file: live.js
 const { EmbedBuilder } = require('discord.js');
-const { one, many, getSetting, setSetting } = require('./db');
+const { one, getSetting, setSetting } = require('./db');
 const queue = require('./queue');
 const { getEmbedColor } = require('./embed_util');
+
+const TICK_MS = 10000;
 
 async function stockCount() {
   const row = await one(
@@ -19,7 +21,7 @@ async function buildStockEmbed() {
   return new EmbedBuilder()
     .setTitle('📦 Live Stock')
     .setColor(color)
-    .setDescription('Auto-updates when stock changes.')
+    .setDescription('Updates every 10s · delete this message anytime · `?stock stop` to disable')
     .addFields(
       { name: 'In Stock', value: '`' + count + '`', inline: true },
       { name: 'Valid Auths', value: '`' + valid + '`', inline: true },
@@ -47,38 +49,39 @@ async function buildQueueEmbed() {
   return new EmbedBuilder()
     .setTitle('📋 Live Queue')
     .setColor(paused ? 0xfaa61a : color)
-    .setDescription(desc)
+    .setDescription(desc + '\n\n_Updates every 10s · delete anytime · `?queue stop`_')
     .addFields({ name: 'Pending', value: '`' + rows.length + '`', inline: true })
     .setFooter({ text: 'Member Farm · live' })
     .setTimestamp();
 }
 
-async function editOrCreate(client, settingKey, channel, embed) {
+async function readPointer(settingKey) {
   const raw = await getSetting(settingKey, '');
-  let channelId = null;
-  let messageId = null;
-  if (raw) {
-    try {
-      const j = JSON.parse(raw);
-      channelId = j.channelId;
-      messageId = j.messageId;
-    } catch {}
-  }
+  if (!raw) return null;
+  try {
+    const j = JSON.parse(raw);
+    if (j.channelId && j.messageId) return j;
+  } catch {}
+  return null;
+}
 
-  if (channelId && messageId && String(channelId) === String(channel.id)) {
+async function editOrCreate(client, settingKey, channel, embed) {
+  const ptr = await readPointer(settingKey);
+
+  if (ptr && String(ptr.channelId) === String(channel.id)) {
     try {
-      const msg = await channel.messages.fetch(messageId);
+      const msg = await channel.messages.fetch(ptr.messageId);
       await msg.edit({ embeds: [embed] });
       return msg;
     } catch {}
   }
 
-  if (channelId && messageId && String(channelId) !== String(channel.id)) {
+  if (ptr && String(ptr.channelId) !== String(channel.id)) {
     try {
-      const ch = await client.channels.fetch(channelId).catch(() => null);
+      const ch = await client.channels.fetch(ptr.channelId).catch(() => null);
       if (ch) {
-        const msg = await ch.messages.fetch(messageId).catch(() => null);
-        if (msg) await msg.delete().catch(() => {});
+        const old = await ch.messages.fetch(ptr.messageId).catch(() => null);
+        if (old) await old.delete().catch(() => {});
       }
     } catch {}
   }
@@ -89,42 +92,46 @@ async function editOrCreate(client, settingKey, channel, embed) {
 }
 
 async function refreshFromStored(client, settingKey, buildEmbed) {
-  const raw = await getSetting(settingKey, '');
-  if (!raw) return;
-  let channelId, messageId;
+  const ptr = await readPointer(settingKey);
+  if (!ptr) return;
   try {
-    const j = JSON.parse(raw);
-    channelId = j.channelId;
-    messageId = j.messageId;
-  } catch {
-    return;
-  }
-  if (!channelId || !messageId) return;
-  try {
-    const ch = await client.channels.fetch(channelId);
+    const ch = await client.channels.fetch(ptr.channelId);
     if (!ch) return;
-    const msg = await ch.messages.fetch(messageId);
-    const embed = await buildEmbed();
-    await msg.edit({ embeds: [embed] });
+    const msg = await ch.messages.fetch(ptr.messageId);
+    await msg.edit({ embeds: [await buildEmbed()] });
   } catch (e) {
-    if (String(e.message || '').includes('Unknown Message') || e.code === 10008) {
+    const code = e.code || e.status;
+    if (code === 10008 || code === 10003 || String(e.message || '').includes('Unknown')) {
       await setSetting(settingKey, '');
     }
   }
 }
 
+async function stopLive(settingKey, client) {
+  const ptr = await readPointer(settingKey);
+  await setSetting(settingKey, '');
+  if (!ptr || !client) return false;
+  try {
+    const ch = await client.channels.fetch(ptr.channelId).catch(() => null);
+    if (!ch) return true;
+    const msg = await ch.messages.fetch(ptr.messageId).catch(() => null);
+    if (msg) await msg.delete().catch(() => {});
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 async function postLiveStock(message, client) {
   const embed = await buildStockEmbed();
-  const msg = await editOrCreate(client, 'live_stock', message.channel, embed);
-  await message.reply('Live stock panel is in this channel (auto-updates).').catch(() => {});
-  return msg;
+  await editOrCreate(client, 'live_stock', message.channel, embed);
+  await message.delete().catch(() => {});
 }
 
 async function postLiveQueue(message, client) {
   const embed = await buildQueueEmbed();
-  const msg = await editOrCreate(client, 'live_queue', message.channel, embed);
-  await message.reply('Live queue panel is in this channel (auto-updates).').catch(() => {});
-  return msg;
+  await editOrCreate(client, 'live_queue', message.channel, embed);
+  await message.delete().catch(() => {});
 }
 
 async function refreshLiveStock(client) {
@@ -141,12 +148,21 @@ async function refreshLiveAll(client) {
   await Promise.all([refreshLiveStock(client), refreshLiveQueue(client)]);
 }
 
+function startLiveTicker(client) {
+  setInterval(() => {
+    refreshLiveAll(client).catch((e) => console.error('live tick', e.message));
+  }, TICK_MS);
+  setTimeout(() => refreshLiveAll(client).catch(() => {}), 3000);
+}
+
 module.exports = {
   postLiveStock,
   postLiveQueue,
   refreshLiveStock,
   refreshLiveQueue,
   refreshLiveAll,
+  startLiveTicker,
+  stopLive,
   buildStockEmbed,
   buildQueueEmbed,
 };
