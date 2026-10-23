@@ -1,40 +1,54 @@
 // language: JavaScript, file: live.js
 const { EmbedBuilder } = require('discord.js');
 const { one, getSetting, setSetting } = require('./db');
-const queue = require('./queue');
 const { getEmbedColor } = require('./embed_util');
 
-const TICK_MS = 10000;
+const TICK_MS = 5000;
+let tickCount = 0;
+let tickerStarted = false;
+
+function getQueueMod() {
+  try {
+    return require('./queue');
+  } catch {
+    return null;
+  }
+}
 
 async function stockCount() {
   const row = await one(
     'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
   );
-  return row?.c || 0;
+  return Number(row?.c) || 0;
 }
 
 async function buildStockEmbed() {
   const color = await getEmbedColor();
   const count = await stockCount();
-  const valid = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c || 0;
+  const valid = Number((await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c) || 0;
   const paused = (await getSetting('queue_paused', '0')) === '1';
+  const now = new Date();
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   return new EmbedBuilder()
     .setTitle('📦 Live Stock')
     .setColor(color)
-    .setDescription('Updates every 10s · delete this message anytime · `?stock stop` to disable')
+    .setDescription('Auto-refresh · `?stock stop` to disable · you can delete this message')
     .addFields(
       { name: 'In Stock', value: '`' + count + '`', inline: true },
       { name: 'Valid Auths', value: '`' + valid + '`', inline: true },
       { name: 'Queue', value: paused ? '`paused`' : '`running`', inline: true }
     )
-    .setFooter({ text: 'Member Farm · live' })
+    .setFooter({ text: 'Member Farm · live · ' + time })
     .setTimestamp();
 }
 
 async function buildQueueEmbed() {
   const color = await getEmbedColor();
-  const rows = await queue.getQueue();
+  const q = getQueueMod();
+  const rows = q ? await q.getQueue() : [];
   const paused = (await getSetting('queue_paused', '0')) === '1';
+  const now = new Date();
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   let desc;
   if (!rows.length) {
     desc = paused ? 'Queue empty · **paused**' : 'Queue empty.';
@@ -49,9 +63,9 @@ async function buildQueueEmbed() {
   return new EmbedBuilder()
     .setTitle('📋 Live Queue')
     .setColor(paused ? 0xfaa61a : color)
-    .setDescription(desc + '\n\n_Updates every 10s · delete anytime · `?queue stop`_')
+    .setDescription(desc + '\n\n_Auto-refresh · `?queue stop`_')
     .addFields({ name: 'Pending', value: '`' + rows.length + '`', inline: true })
-    .setFooter({ text: 'Member Farm · live' })
+    .setFooter({ text: 'Member Farm · live · ' + time })
     .setTimestamp();
 }
 
@@ -60,9 +74,15 @@ async function readPointer(settingKey) {
   if (!raw) return null;
   try {
     const j = JSON.parse(raw);
-    if (j.channelId && j.messageId) return j;
-  } catch {}
+    if (j && j.channelId && j.messageId) return { channelId: String(j.channelId), messageId: String(j.messageId) };
+  } catch (e) {
+    console.error('live pointer parse', settingKey, e.message);
+  }
   return null;
+}
+
+async function savePointer(settingKey, channelId, messageId) {
+  await setSetting(settingKey, JSON.stringify({ channelId: String(channelId), messageId: String(messageId) }));
 }
 
 async function editOrCreate(client, settingKey, channel, embed) {
@@ -73,7 +93,9 @@ async function editOrCreate(client, settingKey, channel, embed) {
       const msg = await channel.messages.fetch(ptr.messageId);
       await msg.edit({ embeds: [embed] });
       return msg;
-    } catch {}
+    } catch (e) {
+      console.error('live editOrCreate edit fail', e.message);
+    }
   }
 
   if (ptr && String(ptr.channelId) !== String(channel.id)) {
@@ -87,21 +109,24 @@ async function editOrCreate(client, settingKey, channel, embed) {
   }
 
   const sent = await channel.send({ embeds: [embed] });
-  await setSetting(settingKey, JSON.stringify({ channelId: channel.id, messageId: sent.id }));
+  await savePointer(settingKey, channel.id, sent.id);
   return sent;
 }
 
 async function refreshFromStored(client, settingKey, buildEmbed) {
+  if (!client) return;
   const ptr = await readPointer(settingKey);
   if (!ptr) return;
   try {
     const ch = await client.channels.fetch(ptr.channelId);
     if (!ch) return;
     const msg = await ch.messages.fetch(ptr.messageId);
-    await msg.edit({ embeds: [await buildEmbed()] });
+    const embed = await buildEmbed();
+    await msg.edit({ embeds: [embed] });
   } catch (e) {
     const code = e.code || e.status;
-    if (code === 10008 || code === 10003 || String(e.message || '').includes('Unknown')) {
+    console.error('live refresh', settingKey, code || '', e.message);
+    if (code === 10008 || code === 10003 || String(e.message || '').toLowerCase().includes('unknown')) {
       await setSetting(settingKey, '');
     }
   }
@@ -135,24 +160,27 @@ async function postLiveQueue(message, client) {
 }
 
 async function refreshLiveStock(client) {
-  if (!client) return;
   await refreshFromStored(client, 'live_stock', buildStockEmbed);
 }
 
 async function refreshLiveQueue(client) {
-  if (!client) return;
   await refreshFromStored(client, 'live_queue', buildQueueEmbed);
 }
 
 async function refreshLiveAll(client) {
-  await Promise.all([refreshLiveStock(client), refreshLiveQueue(client)]);
+  tickCount++;
+  await refreshLiveStock(client);
+  await refreshLiveQueue(client);
 }
 
 function startLiveTicker(client) {
+  if (tickerStarted) return;
+  tickerStarted = true;
+  console.log('Live ticker started (every ' + TICK_MS / 1000 + 's)');
   setInterval(() => {
     refreshLiveAll(client).catch((e) => console.error('live tick', e.message));
   }, TICK_MS);
-  setTimeout(() => refreshLiveAll(client).catch(() => {}), 3000);
+  setTimeout(() => refreshLiveAll(client).catch(() => {}), 2000);
 }
 
 module.exports = {
