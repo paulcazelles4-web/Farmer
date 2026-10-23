@@ -112,12 +112,23 @@ async function handleCommand(message, client) {
       }
       case 'stock': {
         if (!(await perms.canUse(message.author.id, 'stock')) && !perms.isOwner(message.author.id)) return;
+        if ((args[0] || '').toLowerCase() === 'channel') {
+          const ch = message.mentions.channels.first();
+          if (!ch) return message.reply('Usage: ' + prefix + 'stock channel #channel');
+          try {
+            await live.setLiveChannel(client, 'stock', ch);
+            await message.reply('Live stock panel set to <#' + ch.id + '> and posted.');
+          } catch (e) {
+            await message.reply('Failed: ' + (e.message || e));
+          }
+          break;
+        }
         const count = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1')).c;
         const valid = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1')).c;
         await message.reply({ embeds: [new EmbedBuilder().setTitle('Stock').setColor(brandColor).addFields(
           { name: 'In Stock', value: '`' + count + '`', inline: true },
           { name: 'Valid Auths', value: '`' + valid + '`', inline: true }
-        ).setFooter({ text: 'Member Farm · live panel is in #stock' }).setTimestamp()] });
+        ).setFooter({ text: 'Member Farm · live: ?stock channel #channel' }).setTimestamp()] });
         await live.refreshLiveStock(client).catch(() => {});
         break;
       }
@@ -206,12 +217,23 @@ async function handleCommand(message, client) {
       case 'queue': {
         if (!(await perms.canUse(message.author.id, 'queue')) && !perms.isOwner(message.author.id)) return;
         const sub = (args[0] || '').toLowerCase();
+        if (sub === 'channel') {
+          const ch = message.mentions.channels.first();
+          if (!ch) return message.reply('Usage: ' + prefix + 'queue channel #channel');
+          try {
+            await live.setLiveChannel(client, 'queue', ch);
+            await message.reply('Live queue panel set to <#' + ch.id + '> and posted.');
+          } catch (e) {
+            await message.reply('Failed: ' + (e.message || e));
+          }
+          break;
+        }
         if (!sub) {
           const rows = await queue.getQueue();
           const desc = rows.length
             ? rows.map((r) => '**#' + r.position + '** `' + r.guild_id + '` ×' + r.amount).join('\n')
             : 'Queue empty.';
-          await message.reply({ embeds: [new EmbedBuilder().setTitle('Queue').setColor(brandColor).setDescription(desc).setFooter({ text: 'Member Farm · live panel is in #queue' }).setTimestamp()] });
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Queue').setColor(brandColor).setDescription(desc).setFooter({ text: 'Member Farm · live: ?queue channel #channel' }).setTimestamp()] });
           await live.refreshLiveQueue(client).catch(() => {});
         } else if (sub === 'clear') {
           const id = 'clearq_' + Date.now();
