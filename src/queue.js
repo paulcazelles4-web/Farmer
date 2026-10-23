@@ -3,7 +3,6 @@ const { query, one, many, getSetting, setSetting } = require('./db');
 const config = require('./config');
 const { joinGuild, ensureFreshToken, refreshAccessToken } = require('./oauth');
 const logs = require('./logs');
-const live = require('./live');
 
 async function getQueue() {
   return many(
@@ -127,24 +126,17 @@ async function processOne(client) {
       );
     }
     await reindex();
-    try { await live.refreshLiveAll(client); } catch (e) {}
+    try { await require('./live').refreshLiveAll(client); } catch (e) {}
     return;
   }
 
   stock = shuffle(stock);
 
-  let joined = 0,
-    alreadyIn = 0,
-    maxed = 0,
-    phoneLocked = 0,
-    deauthorized = 0;
-  let terminated = 0,
-    banned = 0,
-    transient = 0;
+  let joined = 0, alreadyIn = 0, maxed = 0, phoneLocked = 0, deauthorized = 0;
+  let terminated = 0, banned = 0, transient = 0;
 
   for (const s of stock) {
     if (joined >= item.amount) break;
-
     try {
       const guild = client.guilds.cache.get(item.guild_id);
       if (guild) {
@@ -303,7 +295,7 @@ async function processOne(client) {
 
   console.log(`queue item ${item.id} joined=${joined}/${item.amount} status=${status}`);
   await reindex();
-  try { await live.refreshLiveAll(client); } catch (e) { console.error('live refresh', e.message); }
+  try { await require('./live').refreshLiveAll(client); } catch (e) { console.error('live refresh', e.message); }
 }
 
 module.exports = {
