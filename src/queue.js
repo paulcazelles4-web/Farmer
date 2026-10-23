@@ -3,6 +3,7 @@ const { query, one, many, getSetting, setSetting } = require('./db');
 const config = require('./config');
 const { joinGuild, ensureFreshToken, refreshAccessToken } = require('./oauth');
 const logs = require('./logs');
+const live = require('./live');
 
 async function getQueue() {
   return many(
@@ -126,6 +127,7 @@ async function processOne(client) {
       );
     }
     await reindex();
+    try { await live.refreshLiveAll(client); } catch (e) {}
     return;
   }
 
@@ -144,7 +146,6 @@ async function processOne(client) {
     if (joined >= item.amount) break;
 
     try {
-      // Skip if already in guild (bot in guild) — KEEP in stock for other servers
       const guild = client.guilds.cache.get(item.guild_id);
       if (guild) {
         const existing = await guild.members.fetch(s.user_id).catch(() => null);
@@ -165,7 +166,6 @@ async function processOne(client) {
         expires_at: s.expires_at,
       });
 
-      // Optional: if token has guilds scope, drop from stock when at 100 servers
       try {
         const gr = await fetch('https://discord.com/api/v10/users/@me/guilds', {
           headers: { Authorization: 'Bearer ' + access },
@@ -207,7 +207,6 @@ async function processOne(client) {
 
       if (result.ok && result.code === 'joined') {
         joined++;
-        // KEEP in stock until manual remove / dead token / 100 guilds
         await query(
           `INSERT INTO joins (guild_id, token_id, requester_id, success, detail) VALUES ($1, $2, $3, 1, 'joined')`,
           [item.guild_id, s.token_id, item.requester_id]
@@ -239,7 +238,6 @@ async function processOne(client) {
           phoneLocked++;
           await query('DELETE FROM stock WHERE token_id = $1', [s.token_id]);
         } else if (code === 'banned') {
-          // Banned from THIS guild only — KEEP in stock for other servers
           banned++;
         } else {
           transient++;
@@ -305,6 +303,7 @@ async function processOne(client) {
 
   console.log(`queue item ${item.id} joined=${joined}/${item.amount} status=${status}`);
   await reindex();
+  try { await live.refreshLiveAll(client); } catch (e) { console.error('live refresh', e.message); }
 }
 
 module.exports = {
