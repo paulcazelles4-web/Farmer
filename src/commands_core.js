@@ -25,15 +25,25 @@ function confirmRow(id) {
 
 async function handleCommand(message, client) {
   const prefix = await getPrefix();
-  if (!message.content.startsWith(prefix) || message.author.bot) return;
+  if (message.author.bot) return;
+  if (!message.content) return;
+  if (!message.content.startsWith(prefix)) return;
 
   const args = message.content.slice(prefix.length).trim().split(/\s+/);
   const cmd = (args.shift() || '').toLowerCase();
   if (!cmd) return;
+  console.log('cmd', cmd, 'from', message.author.id, 'guild', message.guild?.id);
 
   const mainGuild = config.MAIN_GUILD_ID || '1499704751481294878';
   if (cmd !== 'verify') {
-    if (!message.guild || message.guild.id !== mainGuild) return;
+    if (!message.guild) {
+      return message.reply('Use commands in the server, not in DMs.').catch(() => {});
+    }
+    if (message.guild.id !== mainGuild) {
+      return message.reply(
+        'Commands only work in the main server (`' + mainGuild + '`). This server is `' + message.guild.id + '`.'
+      ).catch(() => {});
+    }
   }
 
   if (message.guild) {
@@ -46,7 +56,20 @@ async function handleCommand(message, client) {
   }
 
   const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status'];
-  if (!publicCmds.includes(cmd) && !(await perms.canUse(message.author.id, cmd)) && !perms.isOwner(message.author.id)) return;
+  const uid = message.author.id;
+  let allowed =
+    publicCmds.includes(cmd) ||
+    perms.isOwner(uid) ||
+    (await perms.canUse(uid, cmd));
+  if (!allowed && cmd === 'set') {
+    allowed =
+      (await perms.canUse(uid, 'stock')) ||
+      (await perms.canUse(uid, 'queue')) ||
+      (await perms.canUse(uid, 'set'));
+  }
+  if (!allowed) {
+    return message.reply('No permission for `' + prefix + cmd + '`. Ask the owner to `?grant` you.').catch(() => {});
+  }
 
   if (cmd === 'token' && args[0] && ['export', 'import'].includes(String(args[0]).toLowerCase())) {
     await handleExtra('token', message, args, client, perms);
@@ -237,12 +260,6 @@ async function handleCommand(message, client) {
         break;
       }
       case 'set': {
-        const can =
-          perms.isOwner(message.author.id) ||
-          (await perms.canUse(message.author.id, 'set')) ||
-          (await perms.canUse(message.author.id, 'stock')) ||
-          (await perms.canUse(message.author.id, 'queue'));
-        if (!can) return;
         const kind = (args[0] || '').toLowerCase();
         const ch = message.mentions.channels.first();
         if (!kind || !ch || !['stock', 'queue'].includes(kind)) {
