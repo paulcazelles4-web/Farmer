@@ -112,12 +112,13 @@ async function handleCommand(message, client) {
       }
       case 'stock': {
         if (!(await perms.canUse(message.author.id, 'stock')) && !perms.isOwner(message.author.id)) return;
-        if ((args[0] || '').toLowerCase() === 'stop') {
-          await live.stopLive('live_stock', client);
-          await message.reply('Live stock panel stopped.').catch(() => {});
-          break;
-        }
-        await live.postLiveStock(message, client);
+        const count = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1')).c;
+        const valid = (await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1')).c;
+        await message.reply({ embeds: [new EmbedBuilder().setTitle('Stock').setColor(brandColor).addFields(
+          { name: 'In Stock', value: '`' + count + '`', inline: true },
+          { name: 'Valid Auths', value: '`' + valid + '`', inline: true }
+        ).setFooter({ text: 'Member Farm · live panel is in #stock' }).setTimestamp()] });
+        await live.refreshLiveStock(client).catch(() => {});
         break;
       }
       case 'remove': {
@@ -206,10 +207,12 @@ async function handleCommand(message, client) {
         if (!(await perms.canUse(message.author.id, 'queue')) && !perms.isOwner(message.author.id)) return;
         const sub = (args[0] || '').toLowerCase();
         if (!sub) {
-          await live.postLiveQueue(message, client);
-        } else if (sub === 'stop') {
-          await live.stopLive('live_queue', client);
-          await message.reply('Live queue panel stopped.').catch(() => {});
+          const rows = await queue.getQueue();
+          const desc = rows.length
+            ? rows.map((r) => '**#' + r.position + '** `' + r.guild_id + '` ×' + r.amount).join('\n')
+            : 'Queue empty.';
+          await message.reply({ embeds: [new EmbedBuilder().setTitle('Queue').setColor(brandColor).setDescription(desc).setFooter({ text: 'Member Farm · live panel is in #queue' }).setTimestamp()] });
+          await live.refreshLiveQueue(client).catch(() => {});
         } else if (sub === 'clear') {
           const id = 'clearq_' + Date.now();
           client.pendingConfirms.set(id, { action: 'queue_clear', author: message.author.id });
