@@ -73,6 +73,7 @@ async function buildQueueEmbed() {
     .setTimestamp();
 }
 
+/** Find text channel by name in main guild (exact, then endsWith / includes). */
 async function resolveChannel(client, name, settingKey) {
   const saved = await getSetting(settingKey, '');
   if (saved) {
@@ -80,15 +81,36 @@ async function resolveChannel(client, name, settingKey) {
     if (ch && ch.isTextBased()) return ch;
   }
   const guildId = config.MAIN_GUILD_ID || '1499704751481294878';
-  const guild = client.guilds.cache.get(guildId) || (await client.guilds.fetch(guildId).catch(() => null));
-  if (!guild) return null;
-  const found = guild.channels.cache.find(
-    (c) => c.isTextBased() && String(c.name).toLowerCase() === String(name).toLowerCase()
+  const guild =
+    client.guilds.cache.get(guildId) || (await client.guilds.fetch(guildId).catch(() => null));
+  if (!guild) {
+    console.error('live: main guild not found', guildId);
+    return null;
+  }
+  // ensure channel cache is populated
+  try {
+    await guild.channels.fetch();
+  } catch {}
+
+  const target = String(name).toLowerCase();
+  const plain = target.replace(/^・/, '').replace(/^\./, '').trim();
+
+  let found = guild.channels.cache.find(
+    (c) => c.isTextBased() && String(c.name).toLowerCase() === target
   );
+  if (!found) {
+    found = guild.channels.cache.find((c) => {
+      if (!c.isTextBased()) return false;
+      const n = String(c.name).toLowerCase();
+      return n === plain || n.endsWith(plain) || n.includes(plain);
+    });
+  }
   if (found) {
     await setSetting(settingKey, found.id);
+    console.log('live: bound', name, '→', found.id, found.name);
     return found;
   }
+  console.error('live: channel not found for', name);
   return null;
 }
 
@@ -105,7 +127,7 @@ async function upsertPanel(client, channel, msgSettingKey, embed) {
     }
   }
   try {
-    const recent = await channel.messages.fetch({ limit: 20 });
+    const recent = await channel.messages.fetch({ limit: 30 });
     const mine = recent.find(
       (m) =>
         m.author.id === client.user.id &&
@@ -127,7 +149,7 @@ async function upsertPanel(client, channel, msgSettingKey, embed) {
 async function refreshLiveStock(client) {
   if (!client?.user) return;
   try {
-    const ch = await resolveChannel(client, 'stock', 'live_stock_channel_id');
+    const ch = await resolveChannel(client, '・stock', 'live_stock_channel_id');
     if (!ch) return;
     const embed = await buildStockEmbed();
     await upsertPanel(client, ch, 'live_stock_message_id', embed);
@@ -139,7 +161,7 @@ async function refreshLiveStock(client) {
 async function refreshLiveQueue(client) {
   if (!client?.user) return;
   try {
-    const ch = await resolveChannel(client, 'queue', 'live_queue_channel_id');
+    const ch = await resolveChannel(client, '・queue', 'live_queue_channel_id');
     if (!ch) return;
     const embed = await buildQueueEmbed();
     await upsertPanel(client, ch, 'live_queue_message_id', embed);
@@ -156,7 +178,7 @@ async function refreshLiveAll(client) {
 function startLiveTicker(client) {
   if (tickerStarted) return;
   tickerStarted = true;
-  console.log('Live panels ticker: #stock + #queue every ' + TICK_MS / 1000 + 's');
+  console.log('Live panels ticker: ・stock + ・queue every ' + TICK_MS / 1000 + 's');
   setInterval(() => {
     refreshLiveAll(client).catch((e) => console.error('live tick', e.message));
   }, TICK_MS);
