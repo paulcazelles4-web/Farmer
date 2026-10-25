@@ -33,22 +33,29 @@ function clock() {
 async function buildStockEmbed() {
   const color = await getEmbedColor();
   const count = await stockCount();
-  const valid = Number((await one('SELECT COUNT(*)::int AS c FROM tokens WHERE valid = 1'))?.c) || 0;
-  const paused = (await getSetting('queue_paused', '0')) === '1';
   return new EmbedBuilder()
     .setTitle('📦 Live Stock')
     .setColor(color)
     .setDescription('This panel auto-updates every 5 seconds.')
-    .addFields(
-      { name: 'In Stock', value: '`' + count + '`', inline: true },
-      { name: 'Valid Auths', value: '`' + valid + '`', inline: true },
-      { name: 'Queue', value: paused ? '`paused`' : '`running`', inline: true }
-    )
+    .addFields({ name: 'In Stock', value: '`' + count + '`' })
     .setFooter({ text: 'Member Farm · live · ' + clock() })
     .setTimestamp();
 }
 
-async function buildQueueEmbed() {
+async function resolveUsername(client, userId) {
+  if (!userId) return 'unknown';
+  try {
+    if (client?.users) {
+      const cached = client.users.cache.get(String(userId));
+      if (cached) return cached.username || cached.tag || String(userId);
+      const u = await client.users.fetch(String(userId)).catch(() => null);
+      if (u) return u.username || u.tag || String(userId);
+    }
+  } catch {}
+  return String(userId);
+}
+
+async function buildQueueEmbed(client) {
   const color = await getEmbedColor();
   const q = getQueueMod();
   const rows = q ? await q.getQueue() : [];
@@ -57,10 +64,24 @@ async function buildQueueEmbed() {
   if (!rows.length) {
     desc = paused ? 'Queue empty · **paused**' : 'Queue empty.';
   } else {
-    const lines = rows.slice(0, 25).map((r) => {
+    const lines = [];
+    for (const r of rows.slice(0, 25)) {
       const pri = Number(r.priority) ? '⚡ ' : '';
-      return pri + '**#' + r.position + '** `' + r.guild_id + '` ×`' + r.amount + '` · <@' + r.requester_id + '>';
-    });
+      const name = await resolveUsername(client, r.requester_id);
+      // name · serverID · amount
+      lines.push(
+        pri +
+          '**#' +
+          r.position +
+          '** `' +
+          name +
+          '` → `' +
+          r.guild_id +
+          '` ×`' +
+          r.amount +
+          '`'
+      );
+    }
     if (rows.length > 25) lines.push('_… +' + (rows.length - 25) + ' more_');
     desc = (paused ? '**PAUSED**\n' : '') + lines.join('\n');
   }
@@ -161,7 +182,7 @@ async function refreshLiveQueue(client) {
   try {
     const ch = await resolveChannel(client, '・queue', 'live_queue_channel_id');
     if (!ch) return;
-    const embed = await buildQueueEmbed();
+    const embed = await buildQueueEmbed(client);
     await upsertPanel(client, ch, 'live_queue_message_id', embed);
   } catch (e) {
     console.error('refreshLiveQueue', e.message);
@@ -203,7 +224,7 @@ async function setLiveChannel(client, kind, channel) {
   if (kind === 'queue') {
     await setSetting('live_queue_channel_id', channel.id);
     await setSetting('live_queue_message_id', '');
-    const embed = await buildQueueEmbed();
+    const embed = await buildQueueEmbed(client);
     const sent = await channel.send({ embeds: [embed] });
     await setSetting('live_queue_message_id', sent.id);
     return sent;
