@@ -213,7 +213,7 @@ async function handleCommand(message, client) {
         return void (await message.reply({ content: 'Confirm clear entire queue?', components: [confirmRow(id)] }));
       }
       if (sub === 'remove') { await queue.removeFromQueue(args[1]); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Removed ' + args[1])); }
-      if (sub === 'pause') { await queue.pauseQueue(); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Queue resumed')); }
+      if (sub === 'pause') { await queue.pauseQueue(); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Queue paused')); }
       if (sub === 'resume') { await queue.resumeQueue(); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Queue resumed')); }
       if (sub === 'priority') { await queue.setPriority(args[1]); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Priority set')); }
       return;
