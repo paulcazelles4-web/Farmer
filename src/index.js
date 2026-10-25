@@ -3,13 +3,15 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, Events, EmbedBuilder } = require('discord.js');
 const { init, one, many, query, getSetting } = require('./db');
 const { createOAuthServer, dedupeAllTokens } = require('./oauth');
-const { handleCommand } = require('./commands');
+const { handleCommand, getPrefix } = require('./commands');
 const logs = require('./logs');
 const queue = require('./queue');
 const live = require('./live');
 const apply = require('./apply');
 const config = require('./config');
 const perms = require('./permissions');
+const { buildHelpPayload } = require('./help');
+const { getEmbedColor } = require('./embed_util');
 
 if (!process.env.BOT_TOKEN) {
   console.error('BOT_TOKEN missing');
@@ -110,7 +112,6 @@ async function isAntiLeave(guildId) {
 
       await handleCommand(message, client);
 
-      // Auto-clean farm channel after 10s — never for owner
       if (isFarm && !NEVER_DELETE_USERS.has(String(message.author.id))) {
         const ch = message.channel;
         const userMsgId = message.id;
@@ -142,6 +143,25 @@ async function isAntiLeave(guildId) {
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
+
+    // Help panel category dropdown
+    if (interaction.isStringSelectMenu() && interaction.customId === 'help_category') {
+      try {
+        const prefix = await getPrefix();
+        const color = await getEmbedColor();
+        const category = interaction.values[0];
+        const payload = await buildHelpPayload(prefix, color, category, interaction.user.id);
+        await interaction.update(payload);
+      } catch (e) {
+        console.error('help select', e);
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({ content: 'Failed to update help.', ephemeral: true }).catch(() => {});
+        } else {
+          await interaction.reply({ content: 'Failed to update help.', ephemeral: true }).catch(() => {});
+        }
+      }
+      return;
+    }
 
     if (interaction.customId?.startsWith('confirm_') || interaction.customId?.startsWith('decline_')) {
       const id = interaction.customId.replace(/^(confirm_|decline_)/, '');
