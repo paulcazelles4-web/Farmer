@@ -16,7 +16,7 @@ if (!process.env.BOT_TOKEN) {
   process.exit(1);
 }
 if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL missing — add Postgres plugin on Railway');
+  console.error('DATABASE_URL missing — set a Postgres connection string in env vars');
   process.exit(1);
 }
 
