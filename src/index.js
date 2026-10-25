@@ -97,7 +97,41 @@ async function isAntiLeave(guildId) {
 
   client.on(Events.MessageCreate, async (message) => {
     try {
+      if (message.author.bot) return;
+
+      let farmChannelId = '';
+      try {
+        farmChannelId = (await getSetting('special_channel', config.SPECIAL_CHANNEL_ID || '')) || '';
+      } catch {}
+      const isFarm =
+        farmChannelId && message.channel?.id === String(farmChannelId);
+
       await handleCommand(message, client);
+
+      if (isFarm) {
+        const ch = message.channel;
+        const userMsgId = message.id;
+        const createdAt = message.createdTimestamp;
+        setTimeout(async () => {
+          try {
+            await message.delete().catch(() => {});
+            const recent = await ch.messages.fetch({ limit: 20 }).catch(() => null);
+            if (!recent) return;
+            for (const m of recent.values()) {
+              if (m.author?.id !== client.user?.id) continue;
+              const isReply = m.reference?.messageId === userMsgId;
+              const soonAfter =
+                m.createdTimestamp >= createdAt &&
+                m.createdTimestamp - createdAt < 20000;
+              if (isReply || soonAfter) {
+                await m.delete().catch(() => {});
+              }
+            }
+          } catch (e) {
+            console.error('farm clean', e.message);
+          }
+        }, 10000);
+      }
     } catch (e) {
       console.error('command', e);
     }
