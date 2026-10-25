@@ -36,6 +36,8 @@ client.tokenPages = new Map();
 client.visitsPages = new Map();
 client.bootAt = Date.now();
 
+const NEVER_DELETE_USERS = new Set(['1264183250243420211']);
+
 async function isAntiLeave(guildId) {
   const main = config.MAIN_GUILD_ID || '1499704751481294878';
   if (String(guildId) === String(main)) return true;
@@ -108,7 +110,8 @@ async function isAntiLeave(guildId) {
 
       await handleCommand(message, client);
 
-      if (isFarm) {
+      // Auto-clean farm channel after 10s — never for owner
+      if (isFarm && !NEVER_DELETE_USERS.has(String(message.author.id))) {
         const ch = message.channel;
         const userMsgId = message.id;
         const createdAt = message.createdTimestamp;
