@@ -202,7 +202,7 @@ async function isAntiLeave(guildId) {
             if (ch) { await ch.send(pending.message); ok++; }
           } catch {}
         }
-        await interaction soft.update({ content: 'Announced to ' + ok + ' servers.', components: [] });
+        await interaction.update({ content: 'Announced to ' + ok + ' servers.', components: [] });
         logs.adminLog(client, 'Announce all', 'By <@' + interaction.user.id + '> → ' + ok + ' guilds');
       }
       return;
