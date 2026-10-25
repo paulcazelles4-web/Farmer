@@ -144,6 +144,16 @@ async function isAntiLeave(guildId) {
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
 
+    if (interaction.isButton() && interaction.customId?.startsWith('req_')) {
+      try {
+        const sp = require('./server_prompt');
+        const handled = await sp.handleRequestButton(interaction, client);
+        if (handled) return;
+      } catch (e) {
+        console.error('request btn', e);
+      }
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId === 'help_category') {
       try {
         const prefix = await getPrefix();
