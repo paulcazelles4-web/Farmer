@@ -46,7 +46,7 @@ async function handleCommand(message, client) {
     return message.reply('Bot is currently under maintenance.');
   }
 
-  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status'];
+  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status', 'ai'];
   const uid = message.author.id;
   let allowed = publicCmds.includes(cmd) || perms.isOwner(uid) || (await perms.canUse(uid, cmd));
   if (!allowed && cmd === 'set') {
@@ -62,6 +62,14 @@ async function handleCommand(message, client) {
   if (cmd === 'aiprompt' || cmd === 'prompt') {
     const sp = require('./server_prompt');
     return sp.handleAiprompt(message, args, client);
+  }
+  if (cmd === 'ai') {
+    const ai = require('./ai_chat');
+    return ai.handleAiCommand(message, args, client);
+  }
+  if (cmd === 'aichannel') {
+    const ai = require('./ai_chat');
+    return ai.handleAichannel(message, args, client);
   }
 
   const brandColor = await getEmbedColor();
