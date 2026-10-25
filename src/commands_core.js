@@ -222,7 +222,29 @@ async function handleCommand(message, client) {
           const ch = message.mentions.channels.first();
           await setSetting('special_channel', ch.id);
           await setSetting('special_channel_name', ch.name);
-          await message.reply('Join channel set to <#' + ch.id + '>');
+          let purged = 0;
+          try {
+            for (let round = 0; round < 50; round++) {
+              const batch = await ch.messages.fetch({ limit: 100 });
+              if (!batch.size) break;
+              const young = batch.filter((m) => Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000);
+              if (young.size >= 2) {
+                const res = await ch.bulkDelete(young, true).catch(() => null);
+                purged += res ? res.size : 0;
+              }
+              for (const m of batch.values()) {
+                if (young.has(m.id)) continue;
+                await m.delete().catch(() => {});
+                purged++;
+              }
+              if (batch.size < 100) break;
+            }
+          } catch (e) {
+            console.error('farm channel purge', e.message);
+          }
+          await message.channel.send(
+            'Join channel set to <#' + ch.id + '>. Purged **' + purged + '** messages. Auto-clean: messages deleted after 10s.'
+          ).then((m) => setTimeout(() => m.delete().catch(() => {}), 10000));
         }
         break;
       }
