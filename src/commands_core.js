@@ -59,6 +59,10 @@ async function handleCommand(message, client) {
   }
   if (cmd === 'token') return handleTokenList(message, client);
   if (cmd === 'visits') return handleVisits(message, client, args);
+  if (cmd === 'ticket') {
+    const tickets = require('./tickets');
+    return tickets.handleTicketCommand(message, args, client);
+  }
 
   const brandColor = await getEmbedColor();
   try {
