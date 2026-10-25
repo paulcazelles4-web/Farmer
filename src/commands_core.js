@@ -46,7 +46,7 @@ async function handleCommand(message, client) {
     return message.reply('Bot is currently under maintenance.');
   }
 
-  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status', 'ai'];
+  const publicCmds = ['verify', 'bot', 'checkserver', 'help', 'join', 'status'];
   const uid = message.author.id;
   let allowed = publicCmds.includes(cmd) || perms.isOwner(uid) || (await perms.canUse(uid, cmd));
   if (!allowed && cmd === 'set') {
@@ -59,18 +59,6 @@ async function handleCommand(message, client) {
   }
   if (cmd === 'token') return handleTokenList(message, client);
   if (cmd === 'visits') return handleVisits(message, client, args);
-  if (cmd === 'aiprompt' || cmd === 'prompt') {
-    const sp = require('./server_prompt');
-    return sp.handleAiprompt(message, args, client);
-  }
-  if (cmd === 'ai') {
-    const ai = require('./ai_chat');
-    return ai.handleAiCommand(message, args, client);
-  }
-  if (cmd === 'aichannel') {
-    const ai = require('./ai_chat');
-    return ai.handleAichannel(message, args, client);
-  }
 
   const brandColor = await getEmbedColor();
   try {
@@ -225,7 +213,7 @@ async function handleCommand(message, client) {
         return void (await message.reply({ content: 'Confirm clear entire queue?', components: [confirmRow(id)] }));
       }
       if (sub === 'remove') { await queue.removeFromQueue(args[1]); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Removed ' + args[1])); }
-      if (sub === 'pause') { await queue.pauseQueue(); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Queue paused')); }
+      if (sub === 'pause') { await queue.pauseQueue(); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Queue resumed')); }
       if (sub === 'resume') { await queue.resumeQueue(); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Queue resumed')); }
       if (sub === 'priority') { await queue.setPriority(args[1]); await live.refreshLiveQueue(client).catch(() => {}); return void (await message.reply('Priority set')); }
       return;
