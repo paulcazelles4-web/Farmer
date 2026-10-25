@@ -12,6 +12,7 @@ const config = require('./config');
 const perms = require('./permissions');
 const { buildHelpPayload } = require('./help');
 const { getEmbedColor } = require('./embed_util');
+const tickets = require('./tickets');
 
 if (!process.env.BOT_TOKEN) {
   console.error('BOT_TOKEN missing');
@@ -59,6 +60,7 @@ async function isAntiLeave(guildId) {
 
   client.once(Events.ClientReady, () => {
     live.startLiveTicker(client);
+    tickets.ensureTables().catch((e) => console.error('tickets tables', e.message));
     console.log('Logged in as ' + client.user.tag);
     setInterval(() => {
       queue.processOne(client).catch((e) => console.error('queue process', e));
@@ -110,6 +112,12 @@ async function isAntiLeave(guildId) {
       const isFarm =
         farmChannelId && message.channel?.id === String(farmChannelId);
 
+      try {
+        await tickets.handleTicketMessage(message, client);
+      } catch (e) {
+        console.error('ticket msg', e.message);
+      }
+
       await handleCommand(message, client);
 
       if (isFarm && !NEVER_DELETE_USERS.has(String(message.author.id))) {
@@ -144,7 +152,18 @@ async function isAntiLeave(guildId) {
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
 
-    // Help panel category dropdown
+    if (interaction.isButton() && interaction.customId?.startsWith('ticket_')) {
+      try {
+        const handled = await tickets.handleTicketInteraction(interaction);
+        if (handled) return;
+      } catch (e) {
+        console.error('ticket interaction', e);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({ content: 'Ticket error.', ephemeral: true }).catch(() => {});
+        }
+      }
+    }
+
     if (interaction.isStringSelectMenu() && interaction.customId === 'help_category') {
       try {
         const prefix = await getPrefix();
