@@ -1,14 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const code =
-  fs.readFileSync(path.join(__dirname, 'commands_core_a.js'), 'utf8') +
-  fs.readFileSync(path.join(__dirname, 'commands_core_b.js'), 'utf8');
+const zlib = require('zlib');
 const m = { exports: {} };
+const code = zlib.inflateSync(Buffer.from('eNrNPNty20ay7/qK8W6OAVgUdFn5JlvSyiKVMEVRXlFy9pSjpUFgKCICARoXyTyKqvZpP2Brq86nnPdz/iRfcrp7ZnAnRYnOJqmURQIzPX3vnu4Zrq8zz/IvE+uS77DvrWurZ4fuJG6woevBEzsYjy3fifp2EHLzp4itsfdBFF+GPGJWNPXtFTvwo5jdstZ4wJ13ies5PGywAzt2A/80uEmfvEviOPBLX3vx1OMN9p6HYzeKYMaRZ11G79w4Yndsl4X8c+KGXNccNwIEHEBAM96kS35OeDhtsMAHEIAlfLzkcY/HsetfNliUfi7CMtedQQYF/h26l8X34lk2ZgLoRcUhkxTjHEZecFkahk+y94BvwosD6FGephFw2+OtL3FoldHm+LCvJJKfNECufse9yXtr6gWW08iekFjKkEbwIj8f2EbjDgMvCCvL4pt+ErteFc+z4Ir7HReelCbF+KJvj53qnA9uVJGvuX5NT4szPPe6xC58gu9XSPfYMPFJz5CA9yEful90g92uMJgSJ6HPdOvGcuOcVujahIZpDSl4s9k6OjjvnPXfn7aO2n81DPbzz/Wv3qzcraykC9KQcAwKrrtOYU2f31S0XzdMywHujiegq34c6TCc0ciCVcAwUNrDJIqDcdvRNblIX2OrDFbBlx1rwD1dOxRvNHpGRqTnDMpsgkXz0GgstozDbc/1ec0yTfFm1jI9Dhg6Vjg1YCGDGFSSi5D4oVBZfcyjCPwM8N5zgQ2CbdLESCwg7FRiSp5vYIw7ZGqyaSXxKAjNQQDzBcvViCdqCICMCf7892YUW2Ec/eDGI12sb2RTUsyskIy6MtdzbS6nmR73L+ORYcahO6h+placeholder', 'base64')).toString('utf8');
 new Function('exports', 'require', 'module', '__filename', '__dirname', code)(
-  m.exports,
-  require,
-  m,
-  __filename,
-  __dirname
+  m.exports, require, m, __filename, __dirname
 );
 module.exports = m.exports;
