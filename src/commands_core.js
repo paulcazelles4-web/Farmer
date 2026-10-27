@@ -59,6 +59,14 @@ async function handleCommand(message, client) {
   }
   if (cmd === 'token') return handleTokenList(message, client);
   if (cmd === 'visits') return handleVisits(message, client, args);
+  if (cmd === 'audit') {
+    const { handleAuditCommand } = require('./audit');
+    return handleAuditCommand(message, args);
+  }
+  if (cmd === 'maintenance') {
+    const { handleMaintenance } = require('./ops_commands');
+    return handleMaintenance(message, args, client);
+  }
 
   const brandColor = await getEmbedColor();
   try {
@@ -90,6 +98,7 @@ async function handleCommand(message, client) {
       for (let i = available.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [available[i], available[j]] = [available[j], available[i]]; }
       for (const t of available.slice(0, n)) await query('INSERT INTO stock (token_id) VALUES ($1) ON CONFLICT DO NOTHING', [t.id]);
       await live.refreshLiveStock(client).catch(() => {});
+      try { require('./audit').audit(message.author.id, 'restock', String(n)); } catch {}
       return void (await message.reply('Restocked `' + n + '`.'));
     }
     if (cmd === 'remove') {
@@ -98,6 +107,7 @@ async function handleCommand(message, client) {
       const rows = await many('SELECT token_id FROM stock LIMIT $1', [n]);
       for (const r of rows) await query('DELETE FROM stock WHERE token_id = $1', [r.token_id]);
       await live.refreshLiveStock(client).catch(() => {});
+      try { require('./audit').audit(message.author.id, 'remove', String(rows.length)); } catch {}
       return void (await message.reply('Removed `' + rows.length + '` from stock.'));
     }
     if (cmd === 'bot') {
@@ -130,7 +140,10 @@ async function handleCommand(message, client) {
       const stockCount = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1')).c;
       if (stockCount === 0) return message.reply('Error. All stock account are alredy in ' + targetId);
       const q = await queue.addToQueue(targetId, message.author.id, amount);
-      if (!q.ok) return message.reply('Queue is full (max 10). Try later.');
+      if (!q.ok) {
+        if (q.reason === 'duplicate') return message.reply('You already have a pending job for this server.');
+        return message.reply('Queue is full (max 10). Try later.');
+      }
       await live.refreshLiveQueue(client).catch(() => {});
       await query('INSERT INTO cooldowns (user_id, last_join) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET last_join = EXCLUDED.last_join', [message.author.id, Date.now()]);
       return void (await message.reply({ embeds: [new EmbedBuilder().setTitle('Join Queued').setColor(0x57f287).addFields(
@@ -189,8 +202,8 @@ async function handleCommand(message, client) {
     if (cmd === 'set') {
       const kind = (args[0] || '').toLowerCase();
       const ch = message.mentions.channels.first();
-      if (!kind || !ch || !['stock', 'queue'].includes(kind)) {
-        return message.reply('Usage: `' + prefix + 'set stock #channel` or `' + prefix + 'set queue #channel`');
+      if (!kind || !ch || !['stock', 'queue', 'status'].includes(kind)) {
+        return message.reply('Usage: `' + prefix + 'set stock|queue|status #channel`');
       }
       try {
         await live.setLiveChannel(client, kind, ch);
