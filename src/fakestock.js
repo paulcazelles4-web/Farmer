@@ -38,12 +38,12 @@ async function handleFakestock(message, args, client) {
   const prefix = (await getSetting('prefix', '?')) || '?';
   const sub = (args[0] || '').toLowerCase();
 
+  // Authorized only: owner or explicit grant
   if (!perms.isOwner(message.author.id) && !(await perms.canUse(message.author.id, 'fakestock'))) {
     return message.reply('No permission.');
   }
 
   const color = await getEmbedColor();
-  const real = await realStockCount();
   let fake = await getFakeExtra();
 
   if (sub === 'show' || sub === 'status' || !sub) {
@@ -52,16 +52,9 @@ async function handleFakestock(message, args, client) {
         new EmbedBuilder()
           .setTitle('Fake Stock')
           .setColor(color)
-          .setDescription(
-            'Fake stock is **display-only**. Joins and restock still use real stock only.\n' +
-              'Live panel and `?stock` show **real + fake**.'
-          )
-          .addFields(
-            { name: 'Real', value: '`' + real + '`', inline: true },
-            { name: 'Fake extra', value: '`' + fake + '`', inline: true },
-            { name: 'Displayed', value: '`' + (real + fake) + '`', inline: true }
-          )
-          .setFooter({ text: prefix + 'fakestock add|remove|set <n>' })
+          .setDescription('Amount added on top of real stock for **public display** only.')
+          .addFields({ name: 'Fake extra', value: '`' + fake + '`' })
+          .setFooter({ text: prefix + 'fakestock add|remove|set|clear' })
           .setTimestamp(),
       ],
     });
@@ -78,7 +71,7 @@ async function handleFakestock(message, args, client) {
       await audit(message.author.id, 'fakestock_add', String(n), 'extra=' + fake);
     } catch {}
     logs.adminLog(client, 'Fake stock +' + n, 'By <@' + message.author.id + '> · extra now `' + fake + '`');
-    return message.reply('Fake extra **+' + n + '** → `' + fake + '` (displayed `' + (real + fake) + '`).');
+    return message.reply('Fake extra **+' + n + '** → `' + fake + '`.');
   }
 
   if (sub === 'remove') {
@@ -92,13 +85,13 @@ async function handleFakestock(message, args, client) {
       await audit(message.author.id, 'fakestock_remove', String(n), 'extra=' + fake);
     } catch {}
     logs.adminLog(client, 'Fake stock -' + n, 'By <@' + message.author.id + '> · extra now `' + fake + '`');
-    return message.reply('Fake extra **-' + n + '** → `' + fake + '` (displayed `' + (real + fake) + '`).');
+    return message.reply('Fake extra **-' + n + '** → `' + fake + '`.');
   }
 
   if (sub === 'set') {
     const n = parseInt(args[1], 10);
     if (args[1] === undefined || Number.isNaN(n) || n < 0) {
-      return message.reply('Usage: `' + prefix + 'fakestock set <n>` (0 clears fake extra)');
+      return message.reply('Usage: `' + prefix + 'fakestock set <n>` (0 clears)');
     }
     fake = await setFakeExtra(n);
     try {
@@ -108,7 +101,7 @@ async function handleFakestock(message, args, client) {
       await audit(message.author.id, 'fakestock_set', String(fake));
     } catch {}
     logs.adminLog(client, 'Fake stock set', 'By <@' + message.author.id + '> · extra `' + fake + '`');
-    return message.reply('Fake extra set to `' + fake + '` (displayed `' + (real + fake) + '`).');
+    return message.reply('Fake extra set to `' + fake + '`.');
   }
 
   if (sub === 'clear') {
@@ -119,7 +112,7 @@ async function handleFakestock(message, args, client) {
     try {
       await audit(message.author.id, 'fakestock_clear');
     } catch {}
-    return message.reply('Fake extra cleared. Displayed = real only (`' + real + '`).');
+    return message.reply('Fake extra cleared (`0`).');
   }
 
   return message.reply(
