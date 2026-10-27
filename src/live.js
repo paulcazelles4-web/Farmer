@@ -1,8 +1,9 @@
-// language: JavaScript, file: live.js
+// language: JavaScript, file: live.js — stock, queue, public status panels
 const { EmbedBuilder } = require('discord.js');
-const { one, getSetting, setSetting } = require('./db');
+const { one, many, getSetting, setSetting } = require('./db');
 const { getEmbedColor } = require('./embed_util');
 const config = require('./config');
+const perms = require('./permissions');
 
 const TICK_MS = 5000;
 let tickerStarted = false;
@@ -30,6 +31,17 @@ function clock() {
   });
 }
 
+function formatUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return d + 'd ' + h + 'h ' + m + 'm';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm ' + sec + 's';
+}
+
 async function buildStockEmbed() {
   const color = await getEmbedColor();
   const count = await stockCount();
@@ -46,51 +58,119 @@ async function resolveUsername(client, userId) {
   if (!userId) return 'unknown';
   try {
     if (client?.users) {
-      const cached = client.users.cache.get(String(userId));
-      if (cached) return cached.username || cached.tag || String(userId);
-      const u = await client.users.fetch(String(userId)).catch(() => null);
-      if (u) return u.username || u.tag || String(userId);
+      const u = await client.users.fetch(userId).catch(() => null);
+      if (u) return u.username || u.tag || userId;
     }
   } catch {}
-  return String(userId);
+  return userId;
 }
 
 async function buildQueueEmbed(client) {
   const color = await getEmbedColor();
   const q = getQueueMod();
-  const rows = q ? await q.getQueue() : [];
-  const paused = (await getSetting('queue_paused', '0')) === '1';
-  let desc;
-  if (!rows.length) {
-    desc = paused ? 'Queue empty · **paused**' : 'Queue empty.';
-  } else {
-    const lines = [];
-    for (const r of rows.slice(0, 25)) {
-      const pri = Number(r.priority) ? '⚡ ' : '';
-      const name = await resolveUsername(client, r.requester_id);
-      // name · serverID · amount
-      lines.push(
-        pri +
-          '**#' +
-          r.position +
-          '** `' +
-          name +
-          '` → `' +
-          r.guild_id +
-          '` ×`' +
-          r.amount +
-          '`'
-      );
+  let rows = [];
+  let paused = false;
+  try {
+    if (q) {
+      rows = await q.getQueue();
+      paused = await q.isPaused();
     }
-    if (rows.length > 25) lines.push('_… +' + (rows.length - 25) + ' more_');
-    desc = (paused ? '**PAUSED**\n' : '') + lines.join('\n');
+  } catch {}
+  const lines = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const name = await resolveUsername(client, r.requester_id);
+    lines.push(
+      '**#' + (i + 1) + '** `' + name + '` → `' + r.guild_id + '` ×' + r.amount
+    );
   }
+  const desc = lines.length ? lines.join('\n') : '_Queue empty._';
   return new EmbedBuilder()
-    .setTitle('📋 Live Queue')
+    .setTitle('📋 Live Queue' + (paused ? ' · PAUSED' : ''))
     .setColor(paused ? 0xfaa61a : color)
-    .setDescription(desc + '\n\n_Auto-updates every 5 seconds._')
-    .addFields({ name: 'Pending', value: '`' + rows.length + '`', inline: true })
+    .setDescription(desc.slice(0, 4000))
     .setFooter({ text: 'Member Farm · live · ' + clock() })
+    .setTimestamp();
+}
+
+async function buildStatusEmbed(client) {
+  const color = await getEmbedColor();
+  const maint = await perms.isMaintenance();
+  const q = getQueueMod();
+  let queueLen = 0;
+  let paused = false;
+  try {
+    if (q) {
+      const rows = await q.getQueue();
+      queueLen = rows.length;
+      paused = await q.isPaused();
+    }
+  } catch {}
+
+  const now = Math.floor(Date.now() / 1000);
+  const dayAgo = now - 86400;
+
+  const joins24 =
+    (
+      await one(
+        `SELECT COUNT(*)::int AS c FROM joins WHERE success = 1 AND created_at >= $1`,
+        [dayAgo]
+      )
+    )?.c || 0;
+  const jobsDone24 =
+    (
+      await one(
+        `SELECT COUNT(*)::int AS c FROM queue WHERE status IN ('done','failed','failed_nostock') AND created_at >= $1`,
+        [dayAgo]
+      )
+    )?.c || 0;
+  const uniqueUsers24 =
+    (
+      await one(
+        `SELECT COUNT(DISTINCT requester_id)::int AS c FROM joins WHERE created_at >= $1`,
+        [dayAgo]
+      )
+    )?.c || 0;
+  const pendingRetries =
+    (
+      await one(
+        `SELECT COUNT(*)::int AS c FROM queue WHERE status = 'pending' AND next_attempt_at IS NOT NULL`
+      )
+    )?.c || 0;
+
+  const guilds = client.guilds?.cache?.size || 0;
+  const ping = client.ws?.ping != null ? Math.round(client.ws.ping) : null;
+  const uptime = client.bootAt ? formatUptime(Date.now() - client.bootAt) : formatUptime(process.uptime() * 1000);
+  const ready = !!client.user && client.ws?.status === 0;
+
+  // Non-sensitive operational picture only — no tokens, no stock numbers
+  return new EmbedBuilder()
+    .setTitle('Member Farm · Public Status')
+    .setColor(maint ? 0xed4245 : ready ? 0x57f287 : 0xfaa61a)
+    .setDescription(
+      ready
+        ? 'Bot is **online** and accepting the normal command flow (subject to maintenance and permissions).'
+        : 'Bot process is starting or reconnecting.'
+    )
+    .addFields(
+      { name: 'Status', value: ready ? '`Online`' : '`Connecting`', inline: true },
+      { name: 'Maintenance', value: maint ? '`ENABLED`' : '`Off`', inline: true },
+      { name: 'Uptime', value: '`' + uptime + '`', inline: true },
+      { name: 'Websocket', value: ping != null ? '`' + ping + ' ms`' : '`—`', inline: true },
+      { name: 'Servers (bot in)', value: '`' + guilds + '`', inline: true },
+      { name: 'Queue', value: paused ? '`Paused` · `' + queueLen + '`' : '`Running` · `' + queueLen + '`', inline: true },
+      { name: 'Retries scheduled', value: '`' + pendingRetries + '`', inline: true },
+      { name: 'Successful joins (24h)', value: '`' + joins24 + '`', inline: true },
+      { name: 'Jobs closed (24h)', value: '`' + jobsDone24 + '`', inline: true },
+      { name: 'Active requesters (24h)', value: '`' + uniqueUsers24 + '`', inline: true },
+      {
+        name: 'Notes',
+        value:
+          'Stock size and token data are **not** shown on this public panel.\n' +
+          'Delivery reports are sent privately to requesters (no tokens).',
+      }
+    )
+    .setFooter({ text: 'Auto-updates · ' + clock() })
     .setTimestamp();
 }
 
@@ -114,54 +194,32 @@ async function resolveChannel(client, name, settingKey) {
   const target = String(name).toLowerCase();
   const plain = target.replace(/^・/, '').replace(/^\./, '').trim();
 
-  let found = guild.channels.cache.find(
-    (c) => c.isTextBased() && String(c.name).toLowerCase() === target
-  );
+  let found = guild.channels.cache.find((c) => c.isTextBased() && c.name.toLowerCase() === target);
   if (!found) {
-    found = guild.channels.cache.find((c) => {
-      if (!c.isTextBased()) return false;
-      const n = String(c.name).toLowerCase();
-      return n === plain || n.endsWith(plain) || n.includes(plain);
-    });
+    found = guild.channels.cache.find(
+      (c) =>
+        c.isTextBased() &&
+        (c.name.toLowerCase() === plain ||
+          c.name.toLowerCase().endsWith(plain) ||
+          c.name.toLowerCase().includes(plain))
+    );
   }
-  if (found) {
-    await setSetting(settingKey, found.id);
-    console.log('live: bound', name, '→', found.id, found.name);
-    return found;
-  }
-  console.error('live: channel not found for', name);
-  return null;
+  return found || null;
 }
 
-async function upsertPanel(client, channel, msgSettingKey, embed) {
-  if (!channel) return null;
-  const msgId = await getSetting(msgSettingKey, '');
-  if (msgId) {
+async function upsertPanel(client, channel, messageIdKey, embed) {
+  const mid = await getSetting(messageIdKey, '');
+  if (mid) {
     try {
-      const msg = await channel.messages.fetch(msgId);
+      const msg = await channel.messages.fetch(mid);
       await msg.edit({ embeds: [embed] });
       return msg;
-    } catch (e) {
-      console.error('live panel edit fail', msgSettingKey, e.message);
+    } catch {
+      await setSetting(messageIdKey, '');
     }
   }
-  try {
-    const recent = await channel.messages.fetch({ limit: 30 });
-    const mine = recent.find(
-      (m) =>
-        m.author.id === client.user.id &&
-        m.embeds[0] &&
-        (m.embeds[0].title || '').includes('Live')
-    );
-    if (mine) {
-      await mine.edit({ embeds: [embed] });
-      await setSetting(msgSettingKey, mine.id);
-      return mine;
-    }
-  } catch {}
-
   const sent = await channel.send({ embeds: [embed] });
-  await setSetting(msgSettingKey, sent.id);
+  await setSetting(messageIdKey, sent.id);
   return sent;
 }
 
@@ -189,9 +247,22 @@ async function refreshLiveQueue(client) {
   }
 }
 
+async function refreshLiveStatus(client) {
+  if (!client?.user) return;
+  try {
+    const ch = await resolveChannel(client, '・status', 'live_status_channel_id');
+    if (!ch) return;
+    const embed = await buildStatusEmbed(client);
+    await upsertPanel(client, ch, 'live_status_message_id', embed);
+  } catch (e) {
+    console.error('refreshLiveStatus', e.message);
+  }
+}
+
 async function refreshLiveAll(client) {
   await refreshLiveStock(client);
   await refreshLiveQueue(client);
+  await refreshLiveStatus(client);
 }
 
 function startLiveTicker(client) {
@@ -209,6 +280,7 @@ async function postLiveQueue() {}
 async function stopLive(settingKey) {
   if (settingKey === 'live_stock') await setSetting('live_stock_message_id', '');
   else if (settingKey === 'live_queue') await setSetting('live_queue_message_id', '');
+  else if (settingKey === 'live_status') await setSetting('live_status_message_id', '');
 }
 
 async function setLiveChannel(client, kind, channel) {
@@ -229,7 +301,15 @@ async function setLiveChannel(client, kind, channel) {
     await setSetting('live_queue_message_id', sent.id);
     return sent;
   }
-  throw new Error('kind must be stock or queue');
+  if (kind === 'status') {
+    await setSetting('live_status_channel_id', channel.id);
+    await setSetting('live_status_message_id', '');
+    const embed = await buildStatusEmbed(client);
+    const sent = await channel.send({ embeds: [embed] });
+    await setSetting('live_status_message_id', sent.id);
+    return sent;
+  }
+  throw new Error('kind must be stock, queue, or status');
 }
 
 module.exports = {
@@ -237,11 +317,13 @@ module.exports = {
   postLiveQueue,
   refreshLiveStock,
   refreshLiveQueue,
+  refreshLiveStatus,
   refreshLiveAll,
   startLiveTicker,
   stopLive,
   buildStockEmbed,
   buildQueueEmbed,
+  buildStatusEmbed,
   stockCount,
   setLiveChannel,
 };
