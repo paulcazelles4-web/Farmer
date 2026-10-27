@@ -67,6 +67,10 @@ async function handleCommand(message, client) {
     const { handleMaintenance } = require('./ops_commands');
     return handleMaintenance(message, args, client);
   }
+  if (cmd === 'fakestock') {
+    const { handleFakestock } = require('./fakestock');
+    return handleFakestock(message, args, client);
+  }
 
   const brandColor = await getEmbedColor();
   try {
@@ -85,7 +89,8 @@ async function handleCommand(message, client) {
       ).setTimestamp()] }));
     }
     if (cmd === 'stock') {
-      const count = (await one('SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1')).c;
+      const { displayedStockCount } = require('./fakestock');
+      const count = await displayedStockCount();
       return void (await message.reply({ embeds: [new EmbedBuilder().setTitle('Stock').setColor(brandColor).addFields(
         { name: 'In Stock', value: '`' + count + '`', inline: true }
       ).setFooter({ text: 'Member Farm · live: ?set stock #channel' }).setTimestamp()] }));
