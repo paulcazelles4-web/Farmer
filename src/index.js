@@ -59,6 +59,8 @@ async function isAntiLeave(guildId) {
 
   client.once(Events.ClientReady, () => {
     live.startLiveTicker(client);
+    try { require('./queue').ensureQueueColumns(); } catch (e) { console.error('queue cols', e.message); }
+    try { require('./audit').ensureAuditTable(); } catch (e) { console.error('audit table', e.message); }
     console.log('Logged in as ' + client.user.tag);
     setInterval(() => {
       queue.processOne(client).catch((e) => console.error('queue process', e));
