@@ -17,10 +17,19 @@ function getQueueMod() {
 }
 
 async function stockCount() {
+  // Real usable stock only (joins / restock logic)
   const row = await one(
     'SELECT COUNT(*)::int AS c FROM stock s JOIN tokens t ON t.id = s.token_id WHERE t.valid = 1'
   );
   return Number(row?.c) || 0;
+}
+
+async function displayStockCount() {
+  try {
+    return await require('./fakestock').displayedStockCount();
+  } catch {
+    return stockCount();
+  }
 }
 
 function clock() {
@@ -44,7 +53,7 @@ function formatUptime(ms) {
 
 async function buildStockEmbed() {
   const color = await getEmbedColor();
-  const count = await stockCount();
+  const count = await displayStockCount();
   return new EmbedBuilder()
     .setTitle('📦 Live Stock')
     .setColor(color)
@@ -143,7 +152,6 @@ async function buildStatusEmbed(client) {
   const uptime = client.bootAt ? formatUptime(Date.now() - client.bootAt) : formatUptime(process.uptime() * 1000);
   const ready = !!client.user && client.ws?.status === 0;
 
-  // Non-sensitive operational picture only — no tokens, no stock numbers
   return new EmbedBuilder()
     .setTitle('Member Farm · Public Status')
     .setColor(maint ? 0xed4245 : ready ? 0x57f287 : 0xfaa61a)
