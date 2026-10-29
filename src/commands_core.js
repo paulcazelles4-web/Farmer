@@ -121,9 +121,65 @@ async function handleCommand(message, client) {
       return void (await message.reply({ embeds: [new EmbedBuilder().setTitle('Add the Bot').setColor(brandColor).setDescription('Click below.')], components: [row] }));
     }
     if (cmd === 'verify') {
-      const url = await getSetting('oauth_link', 'https://discord.com/api/oauth2/authorize?client_id=' + process.env.CLIENT_ID + '&redirect_uri=' + encodeURIComponent(process.env.REDIRECT_URI || '') + '&response_type=code&scope=identify%20guilds.join%20guilds');
-      const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('—> Verify').setStyle(ButtonStyle.Link).setURL(url));
-      return void (await message.channel.send({ embeds: [new EmbedBuilder().setTitle('Account Verification').setColor(0x57f287).setDescription('Authorize the bot.')], components: [row] }));
+      const oauth = require('./oauth');
+      let url = await getSetting('oauth_link', '');
+      if (!url) url = oauth.buildFarmAuthUrl();
+      if (!url || url.includes('redirect_uri=&')) {
+        return message.reply('Farm OAuth link is not configured (REDIRECT_URI / oauth_link).');
+      }
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setLabel('Authorize').setStyle(ButtonStyle.Link).setURL(url)
+      );
+      return void (await message.channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('Account Authorization')
+            .setColor(0x57f287)
+            .setDescription(
+              'Authorize your Discord account to participate.\n' +
+                'This links your account so the system can process member requests.'
+            )
+            .setFooter({ text: 'Member Farm' }),
+        ],
+        components: [row],
+      }));
+    }
+    if (cmd === 'serververify') {
+      if (!perms.isOwner(uid) && !(await perms.canUse(uid, 'serververify'))) {
+        return message.reply('No permission for `' + prefix + 'serververify`.');
+      }
+      const oauth = require('./oauth');
+      let url = await getSetting('server_oauth_link', '');
+      if (!url) url = oauth.buildServerAuthUrl();
+      if (!url || url.includes('redirect_uri=&')) {
+        return message.reply(
+          'Server verification URL not configured.\n' +
+            'Set `SERVER_REDIRECT_URI` (e.g. https://your.app/server/callback) in Discord OAuth redirects, or `?link server <url>`.'
+        );
+      }
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setLabel('Verify for this server').setStyle(ButtonStyle.Link).setURL(url)
+      );
+      return void (await message.channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('Server Verification Required')
+            .setColor(brandColor)
+            .setDescription(
+              '**Why verify?**\n' +
+                'Verification confirms you are a real member and helps protect the community against multi-account abuse.\n\n' +
+                '**What happens**\n' +
+                '• You authorize with Discord (identify only)\n' +
+                '• We check for linked / alternate accounts on the same network\n' +
+                '• Clean accounts receive the **Verified** role\n' +
+                '• Detected alternate accounts are **banned**\n\n' +
+                'Use one main account. VPN/shared networks with other members may trigger a review.'
+            )
+            .setFooter({ text: 'Payout Central · server security' })
+            .setTimestamp(),
+        ],
+        components: [row],
+      }));
     }
     if (cmd === 'join') {
       const specialId = await getSetting('special_channel', config.SPECIAL_CHANNEL_ID);
@@ -245,11 +301,17 @@ async function handleCommand(message, client) {
       ).setTimestamp()] }));
     }
     if (cmd === 'link') {
-      if (args[0] === 'define') {
+      if (args[0] === 'define' || args[0] === 'farm') {
         const url = args.slice(1).join(' ');
-        if (!url) return message.reply('Usage: ' + prefix + 'link define <url>');
+        if (!url) return message.reply('Usage: ' + prefix + 'link define <farm oauth url>');
         await setSetting('oauth_link', url);
-        return void (await message.reply('OAuth link defined.'));
+        return void (await message.reply('Farm OAuth link (A) defined.'));
+      }
+      if (args[0] === 'server') {
+        const url = args.slice(1).join(' ');
+        if (!url) return message.reply('Usage: ' + prefix + 'link server <server verify oauth url>');
+        await setSetting('server_oauth_link', url);
+        return void (await message.reply('Server verification link (B) defined.'));
       }
       const url = await getSetting('oauth_link', process.env.REDIRECT_URI
         ? 'https://discord.com/api/oauth2/authorize?client_id=' + process.env.CLIENT_ID + '&redirect_uri=' + encodeURIComponent(process.env.REDIRECT_URI) + '&response_type=code&scope=identify%20guilds.join%20guilds'
