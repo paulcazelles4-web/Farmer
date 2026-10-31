@@ -1,4 +1,4 @@
-// language: JavaScript, file: oauth.js — farm OAuth (A) + server verification with alt ban (B)
+// language: JavaScript, file: oauth.js — farm OAuth (A) + server verification with Alt role (B)
 const express = require('express');
 const { query, one, many, getSetting, setSetting } = require('./db');
 const config = require('./config');
@@ -182,21 +182,17 @@ async function ensureVerifiedRole(client) {
     process.env.VERIFIED_ROLE_ID ||
     config.VERIFIED_ROLE_ID ||
     '';
-
   const guild = client?.guilds?.cache?.get(guildId) || (await client?.guilds?.fetch(guildId).catch(() => null));
   if (!guild) return null;
-
   if (roleId) {
     const existing = await guild.roles.fetch(roleId).catch(() => null);
     if (existing) return existing.id;
   }
-
   const byName = guild.roles.cache.find((r) => r.name.toLowerCase() === 'verified');
   if (byName) {
     await setSetting('verified_role', byName.id);
     return byName.id;
   }
-
   try {
     const role = await guild.roles.create({
       name: 'Verified',
@@ -230,18 +226,129 @@ async function assignVerifiedRole(client, userId) {
   }
 }
 
-async function banForAlt(client, userId, reason) {
+async function ensureAltRole(client) {
   const guildId = config.MAIN_GUILD_ID || '1499704751481294878';
+  let roleId = (await getSetting('alt_role', '')) || process.env.ALT_ROLE_ID || '';
+  const guild = client?.guilds?.cache?.get(guildId) || (await client?.guilds?.fetch(guildId).catch(() => null));
+  if (!guild) return null;
+  if (roleId) {
+    const existing = await guild.roles.fetch(roleId).catch(() => null);
+    if (existing) return existing.id;
+  }
+  const byName = guild.roles.cache.find((r) => r.name.toLowerCase() === 'alt');
+  if (byName) {
+    await setSetting('alt_role', byName.id);
+    return byName.id;
+  }
+  try {
+    const role = await guild.roles.create({
+      name: 'Alt',
+      color: 0xed4245,
+      reason: 'Server verification — alternate accounts',
+      mentionable: false,
+      hoist: true,
+    });
+    await setSetting('alt_role', role.id);
+    return role.id;
+  } catch (e) {
+    console.error('create Alt role', e.message);
+    return null;
+  }
+}
+
+async function ensureAltChannel(client, altRoleId) {
+  const guildId = config.MAIN_GUILD_ID || '1499704751481294878';
+  let channelId = (await getSetting('alt_channel', '')) || '';
+  const guild = client?.guilds?.cache?.get(guildId) || (await client?.guilds?.fetch(guildId).catch(() => null));
+  if (!guild) return null;
+  if (channelId) {
+    const ch = await guild.channels.fetch(channelId).catch(() => null);
+    if (ch) return ch;
+  }
+  const byName = guild.channels.cache.find(
+    (c) => c.isTextBased() && (c.name.toLowerCase() === 'alt' || c.name.toLowerCase() === '\u30fbalt')
+  );
+  if (byName) {
+    await setSetting('alt_channel', byName.id);
+    return byName;
+  }
+  try {
+    const { ChannelType, PermissionFlagsBits } = require('discord.js');
+    const everyone = guild.roles.everyone;
+    const ch = await guild.channels.create({
+      name: 'alt',
+      type: ChannelType.GuildText,
+      topic: 'Accounts flagged as alternate during server verification',
+      reason: 'Server verification — alt holding channel',
+      permissionOverwrites: [
+        { id: everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        {
+          id: altRoleId,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+          deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions],
+        },
+        {
+          id: client.user.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageRoles,
+          ],
+        },
+      ],
+    });
+    await setSetting('alt_channel', ch.id);
+    await ch
+      .send({
+        embeds: [
+          {
+            title: 'Alternate account detected',
+            color: 0xed4245,
+            description:
+              'You are seeing this channel because **server verification** flagged this Discord account as an **alternate account** (shared network / linked identity with another account already on the server).\n\n' +
+              '**Alternate accounts are not allowed** on this server.\n\n' +
+              '• Use **one main account** only.\n' +
+              '• Do not create extra accounts to bypass limits, farming rules, or moderation.\n' +
+              '• If you believe this is a mistake (shared household, school network, VPN), contact **staff** from your main account and explain.\n\n' +
+              'Staff may remove the Alt role or take further action after review.\n\n' +
+              '_This channel is read-only._',
+            footer: { text: 'Payout Central · server verification' },
+          },
+        ],
+      })
+      .catch(() => {});
+    return ch;
+  } catch (e) {
+    console.error('create alt channel', e.message);
+    return null;
+  }
+}
+
+async function assignAltRole(client, userId) {
+  const guildId = config.MAIN_GUILD_ID || '1499704751481294878';
+  const roleId = await ensureAltRole(client);
+  if (!roleId) return { ok: false, reason: 'no_role' };
   const guild = client.guilds.cache.get(guildId) || (await client.guilds.fetch(guildId).catch(() => null));
   if (!guild) return { ok: false, reason: 'no_guild' };
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member) return { ok: false, reason: 'not_in_guild' };
   try {
-    await guild.members.ban(userId, {
-      reason: reason || 'Alt account detected during server verification',
-      deleteMessageSeconds: 0,
-    });
-    return { ok: true };
+    const verifiedId = (await getSetting('verified_role', '')) || process.env.VERIFIED_ROLE_ID || '';
+    if (verifiedId && member.roles.cache.has(verifiedId)) {
+      await member.roles.remove(verifiedId, 'Flagged as alt').catch(() => {});
+    }
+  } catch {}
+  if (member.roles.cache.has(roleId)) {
+    await ensureAltChannel(client, roleId);
+    return { ok: true, reason: 'already' };
+  }
+  try {
+    await member.roles.add(roleId, 'Server verification — alternate account');
+    await ensureAltChannel(client, roleId);
+    return { ok: true, reason: 'added' };
   } catch (e) {
-    console.error('banForAlt', e.message);
+    console.error('assignAltRole', e.message);
     return { ok: false, reason: e.message };
   }
 }
@@ -314,9 +421,7 @@ async function exchangeCode(code, redirectUri) {
 async function saveFarmToken(me, tokenData) {
   const expiresAt = Math.floor(Date.now() / 1000) + (tokenData.expires_in || 604800);
   const scope = tokenData.scope || 'identify guilds.join guilds';
-  const existing = await one('SELECT id FROM tokens WHERE user_id = $1 ORDER BY id DESC LIMIT 1', [
-    String(me.id),
-  ]);
+  const existing = await one('SELECT id FROM tokens WHERE user_id = $1 ORDER BY id DESC LIMIT 1', [String(me.id)]);
   if (existing) {
     await query(
       `UPDATE tokens SET access_token = $1, refresh_token = COALESCE($2, refresh_token), expires_at = $3, scope = $4, valid = 1, username = $5 WHERE id = $6`,
@@ -374,7 +479,6 @@ function createOAuthServer(client) {
     );
   });
 
-  // ─── Link A: farm authorize (tokens only, no ban) ───
   app.get('/oauth/callback', async (req, res) => {
     const code = req.query.code;
     if (!code) {
@@ -406,20 +510,13 @@ function createOAuthServer(client) {
         user_agent: ua,
         status: 'farm_ok',
       });
-      res.send(
-        renderPage({
-          title: 'Authorized',
-          subtitle: 'Account linked. You can close this tab.',
-          tone: 'ok',
-        })
-      );
+      res.send(renderPage({ title: 'Authorized', subtitle: 'Account linked. You can close this tab.', tone: 'ok' }));
     } catch (e) {
       console.error('farm callback', e);
       res.status(500).send(renderPage({ title: 'Error', subtitle: 'Try again.', tone: 'bad' }));
     }
   });
 
-  // ─── Link B: server verification (alts → ban) ───
   app.get('/server/callback', async (req, res) => {
     const code = req.query.code;
     if (!code) {
@@ -452,22 +549,46 @@ function createOAuthServer(client) {
           premium_type: me.premium_type,
           ip,
           user_agent: ua,
-          status: 'server_alt_banned',
+          status: 'server_alt_flagged',
           error: 'alts=' + alts.map((a) => a.user_id).join(','),
         });
-        const ban = await banForAlt(
-          client,
-          me.id,
-          'Alt detected (shared network with ' + alts.length + ' other account(s))'
-        );
+        const altRes = await assignAltRole(client, me.id);
+        try {
+          const chId = await getSetting('alt_channel', '');
+          if (chId && client) {
+            const ch = await client.channels.fetch(chId).catch(() => null);
+            if (ch && ch.isTextBased()) {
+              await ch
+                .send({
+                  content: '<@' + me.id + '>',
+                  embeds: [
+                    {
+                      title: 'You were flagged as an alternate account',
+                      color: 0xed4245,
+                      description:
+                        'Verification linked this account to **' +
+                        alts.length +
+                        '** other account(s) on the same network.\n\n' +
+                        '**Alts are not allowed** on this server. Read the rules message above.\n' +
+                        'Appeal only from your **main** account via staff.',
+                      footer: { text: 'Status: server_alt_flagged' },
+                    },
+                  ],
+                })
+                .catch(() => {});
+            }
+          }
+        } catch (e) {
+          console.error('alt notify', e.message);
+        }
         res.send(
           renderPage({
-            title: 'Access denied',
-            subtitle: ban.ok
-              ? 'Multiple accounts were detected on this network. This account has been removed from the server.'
+            title: 'Alternate account flagged',
+            subtitle: altRes.ok
+              ? 'Multiple accounts were detected on this network. You have been given the **Alt** role. Check the locked #alt channel on the server.'
               : 'Multiple accounts were detected on this network. Staff have been notified.',
-            detail: 'If you believe this is an error, contact staff with a single main account.',
-            tone: 'bad',
+            detail: 'Alternate accounts are not allowed. Contact staff from your main account if this is a mistake.',
+            tone: 'warn',
           })
         );
         return;
@@ -532,6 +653,9 @@ module.exports = {
   dedupeAllTokens,
   ensureVerifiedRole,
   assignVerifiedRole,
+  ensureAltRole,
+  assignAltRole,
+  ensureAltChannel,
   buildFarmAuthUrl,
   buildServerAuthUrl,
   farmRedirectUri,
