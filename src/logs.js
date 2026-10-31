@@ -46,18 +46,18 @@ function djoinLog(client, data) {
     .setTitle('DJoin Log')
     .setColor(joined > 0 ? 0x57f287 : 0xfaa61a)
     .addFields(
-      { name: 'User', value: `${userTag || 'unknown'} (\`${userId}\`)`, inline: true },
-      { name: 'Server ID', value: `\`${guildId}\``, inline: true },
+      { name: 'User', value: `${userTag || 'unknown'} (\`${userId || '—'}\`)`, inline: true },
+      { name: 'Target Guild', value: '`' + (guildId || '—') + '`', inline: true },
       { name: 'Tier', value: String(tier), inline: true },
-      { name: 'Joined', value: `\`${joined}\``, inline: true },
-      { name: 'Already In', value: `\`${alreadyIn}\``, inline: true },
-      { name: 'Maxed Out', value: `\`${maxed}\``, inline: true },
-      { name: 'Phone Locked', value: `\`${phoneLocked}\``, inline: true },
-      { name: 'Deauthorized', value: `\`${deauthorized}\``, inline: true },
-      { name: 'Terminated', value: `\`${terminated}\``, inline: true },
-      { name: 'Banned', value: `\`${banned}\``, inline: true },
-      { name: 'Transient Errors', value: `\`${transient}\``, inline: true },
-      { name: 'Stock Left', value: `\`${stockLeft}\``, inline: true }
+      { name: 'Joined', value: '`' + joined + '`', inline: true },
+      { name: 'Already in', value: '`' + alreadyIn + '`', inline: true },
+      { name: 'Maxed', value: '`' + maxed + '`', inline: true },
+      { name: 'Phone lock', value: '`' + phoneLocked + '`', inline: true },
+      { name: 'Deauth', value: '`' + deauthorized + '`', inline: true },
+      { name: 'Terminated', value: '`' + terminated + '`', inline: true },
+      { name: 'Banned', value: '`' + banned + '`', inline: true },
+      { name: 'Transient', value: '`' + transient + '`', inline: true },
+      { name: 'Stock left', value: '`' + stockLeft + '`', inline: true }
     )
     .setFooter({ text: 'Member Farm' })
     .setTimestamp();
@@ -74,16 +74,16 @@ function serverLog(client, title, desc, color = 0x5865f2) {
 
 function botAddedLog(client, data) {
   const emb = new EmbedBuilder()
-    .setTitle('Bot Added to Server')
-    .setColor(0x5865f2)
+    .setTitle('Bot added to server')
+    .setColor(0x57f287)
     .addFields(
-      { name: 'Server Name', value: data.name || 'unknown', inline: true },
-      { name: 'Server ID', value: `\`${data.id}\``, inline: true },
-      { name: 'Member Count', value: `\`${data.memberCount ?? '?'}\``, inline: true },
-      { name: 'Added by', value: data.inviterTag ? `<@${data.inviterId}>` : '`unknown`', inline: true },
-      { name: 'User ID', value: data.inviterId ? `\`${data.inviterId}\`` : '`—`', inline: true },
+      { name: 'Server', value: data.name || 'unknown', inline: true },
+      { name: 'ID', value: '`' + (data.id || '—') + '`', inline: true },
+      { name: 'Member Count', value: '`' + (data.memberCount ?? '?') + '`', inline: true },
+      { name: 'Added by', value: data.inviterTag ? '<@' + data.inviterId + '>' : '`unknown`', inline: true },
+      { name: 'User ID', value: data.inviterId ? '`' + data.inviterId + '`' : '`—`', inline: true },
       { name: 'Username', value: data.inviterTag || '`—`', inline: true },
-      { name: 'Bot now in', value: `**${data.botGuilds}** servers`, inline: true }
+      { name: 'Bot now in', value: '**' + (data.botGuilds ?? '?') + '** servers', inline: true }
     )
     .setFooter({ text: 'Member Farm' })
     .setTimestamp();
@@ -136,4 +136,65 @@ function adminLog(client, title, desc, color = 0xfaa61a) {
   );
 }
 
-module.exports = { farmLog, djoinLog, serverLog, botAddedLog, errorLog, adminLog, sendLog };
+/** Server verification events (success, alt flagged, failures) */
+function verifyLog(client, data = {}) {
+  const status = data.status || 'unknown';
+  const isAlt = String(status).includes('alt');
+  const isFail = String(status).includes('fail');
+  const color = isAlt ? 0xed4245 : isFail ? 0xfaa61a : 0x57f287;
+  const title = isAlt
+    ? 'Verification · Alt flagged'
+    : isFail
+      ? 'Verification · Failed'
+      : 'Verification · OK';
+
+  const emb = new EmbedBuilder()
+    .setTitle(title)
+    .setColor(color)
+    .addFields(
+      {
+        name: 'User',
+        value:
+          (data.username ? '**' + data.username + '**' : 'unknown') +
+          (data.userId ? ' (`' + data.userId + '`)' : ''),
+        inline: true,
+      },
+      { name: 'Status', value: '`' + status + '`', inline: true },
+      { name: 'IP', value: data.ip ? '`' + data.ip + '`' : '`—`', inline: true }
+    )
+    .setFooter({ text: 'Member Farm · verify' })
+    .setTimestamp();
+
+  if (data.alts && data.alts.length) {
+    emb.addFields({
+      name: 'Linked accounts (same IP)',
+      value: data.alts
+        .slice(0, 15)
+        .map((a) => '`' + (a.user_id || a) + '`' + (a.username ? ' · ' + a.username : ''))
+        .join('\n')
+        .slice(0, 1000),
+    });
+  }
+  if (data.ageDays != null) {
+    emb.addFields({ name: 'Account age', value: '`' + data.ageDays + ' days`', inline: true });
+  }
+  if (data.action) {
+    emb.addFields({ name: 'Action', value: data.action, inline: true });
+  }
+  if (data.note) {
+    emb.addFields({ name: 'Note', value: String(data.note).slice(0, 500) });
+  }
+
+  return sendLog(client, 'verify', emb);
+}
+
+module.exports = {
+  farmLog,
+  djoinLog,
+  serverLog,
+  botAddedLog,
+  errorLog,
+  adminLog,
+  verifyLog,
+  sendLog,
+};
