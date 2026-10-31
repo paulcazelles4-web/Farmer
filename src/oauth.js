@@ -178,10 +178,7 @@ function renderPage({ title, subtitle, detail, tone }) {
 async function ensureVerifiedRole(client) {
   const guildId = config.MAIN_GUILD_ID || '1499704751481294878';
   let roleId =
-    (await getSetting('verified_role', '')) ||
-    process.env.VERIFIED_ROLE_ID ||
-    config.VERIFIED_ROLE_ID ||
-    '';
+    (await getSetting('verified_role', '')) || process.env.VERIFIED_ROLE_ID || config.VERIFIED_ROLE_ID || '';
   const guild = client?.guilds?.cache?.get(guildId) || (await client?.guilds?.fetch(guildId).catch(() => null));
   if (!guild) return null;
   if (roleId) {
@@ -306,12 +303,11 @@ async function ensureAltChannel(client, altRoleId) {
             title: 'Alternate account detected',
             color: 0xed4245,
             description:
-              'You are seeing this channel because **server verification** flagged this Discord account as an **alternate account** (shared network / linked identity with another account already on the server).\n\n' +
+              'You are seeing this channel because **server verification** flagged this Discord account as an **alternate account**.\n\n' +
               '**Alternate accounts are not allowed** on this server.\n\n' +
               '• Use **one main account** only.\n' +
-              '• Do not create extra accounts to bypass limits, farming rules, or moderation.\n' +
-              '• If you believe this is a mistake (shared household, school network, VPN), contact **staff** from your main account and explain.\n\n' +
-              'Staff may remove the Alt role or take further action after review.\n\n' +
+              '• Do not create extra accounts to bypass limits or moderation.\n' +
+              '• If this is a mistake, contact **staff** from your main account.\n\n' +
               '_This channel is read-only._',
             footer: { text: 'Payout Central · server verification' },
           },
@@ -581,6 +577,20 @@ function createOAuthServer(client) {
         } catch (e) {
           console.error('alt notify', e.message);
         }
+        try {
+          const logs = require('./logs');
+          await logs.verifyLog(client, {
+            username: me.username,
+            userId: String(me.id),
+            status: 'server_alt_flagged',
+            ip,
+            alts,
+            ageDays,
+            action: altRes.ok ? 'Alt role assigned' : 'Alt role failed: ' + (altRes.reason || ''),
+          });
+        } catch (e) {
+          console.error('verifyLog alt', e.message);
+        }
         res.send(
           renderPage({
             title: 'Alternate account flagged',
@@ -620,6 +630,20 @@ function createOAuthServer(client) {
           : roleRes.reason === 'not_in_guild'
             ? 'Join the server first, then run verification again.'
             : 'Verification recorded. Role assignment pending.';
+
+      try {
+        const logs = require('./logs');
+        await logs.verifyLog(client, {
+          username: me.username,
+          userId: String(me.id),
+          status,
+          ip,
+          ageDays,
+          action: roleLine,
+        });
+      } catch (e) {
+        console.error('verifyLog ok', e.message);
+      }
 
       res.send(
         renderPage({
