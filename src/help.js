@@ -20,7 +20,11 @@ const CATEGORIES = {
       { cmd: 'fakestock', perm: 'fakestock', text: '`' + p + 'fakestock show|add|remove|set|clear`' },
       { cmd: 'link', perm: 'link', text: '`' + p + 'link` · define · server' },
       { cmd: 'verify', perm: null, text: '`' + p + 'verify` — farm authorize (public)' },
-      { cmd: 'serververify', perm: 'serververify', text: '`' + p + 'serververify` — server verify panel (alts → Alt role)' },
+      {
+        cmd: 'serververify',
+        perm: 'serververify',
+        text: '`' + p + 'serververify` — server verify panel (alts → Alt role)',
+      },
       { cmd: 'bot', perm: null, text: '`' + p + 'bot` — add-bot invite button' },
       { cmd: 'join', perm: null, text: '`' + p + 'join <serverID>` — request members' },
       { cmd: 'channel', perm: 'channel', text: '`' + p + 'channel set #channel` — join channel' },
@@ -125,7 +129,13 @@ async function filterCategory(prefix, categoryKey, userId) {
     if (await canSee(userId, e.perm)) visible.push(e.text);
   }
   if (!visible.length) return null;
-  return { key: categoryKey, label: cat.label, emoji: cat.emoji, description: cat.description, lines: visible };
+  return {
+    key: categoryKey,
+    label: cat.label,
+    emoji: cat.emoji,
+    description: cat.description,
+    lines: visible,
+  };
 }
 
 async function getVisibleCategories(prefix, userId) {
@@ -167,16 +177,16 @@ function buildHelpSelect(visibleCats, selectedKey) {
   for (const cat of visibleCats) {
     const opt = new StringSelectMenuOptionBuilder()
       .setLabel(cat.label)
+      .setDescription((cat.description || '').slice(0, 100))
       .setValue(cat.key)
-      .setDescription((cat.description || '').slice(0, 100));
+      .setDefault(cat.key === selectedKey);
     if (cat.emoji) opt.setEmoji(cat.emoji);
-    if (cat.key === selectedKey) opt.setDefault(true);
     menu.addOptions(opt);
   }
   return new ActionRowBuilder().addComponents(menu);
 }
 
-async function buildHelpPayload(prefix, color, categoryKey, userId) {
+async function buildHelpPayload(prefix, color = 0x5865f2, category = 'core', userId) {
   const visible = await getVisibleCategories(prefix, userId);
   if (!visible.length) {
     return {
@@ -184,24 +194,33 @@ async function buildHelpPayload(prefix, color, categoryKey, userId) {
         new EmbedBuilder()
           .setTitle('Member Farm — Command Panel')
           .setColor(color)
-          .setDescription('No commands available for you.')
+          .setDescription('You have no available commands.')
+          .setFooter({ text: 'Member Farm' })
           .setTimestamp(),
       ],
       components: [],
     };
   }
-  let selected = visible.find((c) => c.key === categoryKey) || visible[0];
-  return {
-    embeds: [buildCategoryEmbed(prefix, selected, color)],
-    components: [buildHelpSelect(visible, selected.key)],
-  };
+  const selected = visible.find((c) => c.key === category) || visible[0];
+  const embed = buildCategoryEmbed(prefix, selected, color);
+  const components = visible.length > 1 ? [buildHelpSelect(visible, selected.key)] : [];
+  return { embeds: [embed], components };
+}
+
+function buildHelpEmbed(prefix, color = 0x5865f2) {
+  const lines = CATEGORIES.core.entries(prefix).filter((e) => e.perm === null).map((e) => e.text);
+  return new EmbedBuilder()
+    .setTitle('Member Farm — Command Panel')
+    .setColor(color)
+    .setDescription('Current prefix: `' + prefix + '`')
+    .addFields({ name: 'Core', value: lines.join('\n') || '`—`' })
+    .setFooter({ text: 'Member Farm' })
+    .setTimestamp();
 }
 
 module.exports = {
-  CATEGORIES,
+  buildHelpEmbed,
   buildHelpPayload,
   getVisibleCategories,
-  filterCategory,
-  buildCategoryEmbed,
-  buildHelpSelect,
+  CATEGORIES,
 };
