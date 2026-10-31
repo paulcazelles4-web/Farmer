@@ -52,6 +52,9 @@ async function handleCommand(message, client) {
   if (!allowed && cmd === 'set') {
     allowed = (await perms.canUse(uid, 'stock')) || (await perms.canUse(uid, 'queue')) || (await perms.canUse(uid, 'set'));
   }
+  if (!allowed && (cmd.startsWith('log') || cmd === 'logs')) {
+    allowed = await perms.canUse(uid, 'logs');
+  }
   if (!allowed) return message.reply('No permission for `' + prefix + cmd + '`. Ask the owner to `?grant` you.').catch(() => {});
 
   if (cmd === 'token' && args[0] && ['export', 'import'].includes(String(args[0]).toLowerCase())) {
@@ -70,6 +73,17 @@ async function handleCommand(message, client) {
   if (cmd === 'fakestock') {
     const { handleFakestock } = require('./fakestock');
     return handleFakestock(message, args, client);
+  }
+  if (
+    cmd === 'logfarm' ||
+    cmd === 'logserver' ||
+    cmd === 'logerrors' ||
+    cmd === 'logadmin' ||
+    cmd === 'logverify' ||
+    ((cmd === 'log' || cmd === 'logs') && (args[0] || '').toLowerCase() !== 'test')
+  ) {
+    const { handleLogCommand } = require('./log_cmd');
+    return handleLogCommand(message, args, client, cmd);
   }
 
   const brandColor = await getEmbedColor();
