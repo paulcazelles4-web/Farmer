@@ -35,14 +35,24 @@ async function handleCommand(message, client) {
   if (cmd !== 'verify') {
     if (!message.guild) return message.reply('Use commands in the server, not in DMs.').catch(() => {});
     if (message.guild.id !== mainGuild) {
-      return message.reply('Commands only work in the main server (`' + mainGuild + '`). This server is `' + message.guild.id + '`.').catch(() => {});
+      return message.reply(
+        'Commands only work in the main server (`' +
+          mainGuild +
+          '`). This server is `' +
+          message.guild.id +
+          '`.'
+      ).catch(() => {});
     }
   }
   if (message.guild) {
     const bl = await one('SELECT reason FROM blacklist WHERE guild_id = $1', [message.guild.id]);
     if (bl) return message.reply('This server is blacklisted. Reason: ' + bl.reason);
   }
-  if ((await perms.isMaintenance()) && !(await perms.isMaintenanceAllowed(message.author.id)) && !perms.isOwner(message.author.id)) {
+  if (
+    (await perms.isMaintenance()) &&
+    !(await perms.isMaintenanceAllowed(message.author.id)) &&
+    !perms.isOwner(message.author.id)
+  ) {
     return message.reply('Bot is currently under maintenance.');
   }
 
@@ -50,12 +60,19 @@ async function handleCommand(message, client) {
   const uid = message.author.id;
   let allowed = publicCmds.includes(cmd) || perms.isOwner(uid) || (await perms.canUse(uid, cmd));
   if (!allowed && cmd === 'set') {
-    allowed = (await perms.canUse(uid, 'stock')) || (await perms.canUse(uid, 'queue')) || (await perms.canUse(uid, 'set'));
+    allowed =
+      (await perms.canUse(uid, 'stock')) ||
+      (await perms.canUse(uid, 'queue')) ||
+      (await perms.canUse(uid, 'set'));
   }
   if (!allowed && (cmd.startsWith('log') || cmd === 'logs')) {
     allowed = await perms.canUse(uid, 'logs');
   }
-  if (!allowed) return message.reply('No permission for `' + prefix + cmd + '`. Ask the owner to `?grant` you.').catch(() => {});
+  if (!allowed) {
+    return message
+      .reply('No permission for `' + prefix + cmd + '`. Ask the owner to `?grant` you.')
+      .catch(() => {});
+  }
 
   if (cmd === 'token' && args[0] && ['export', 'import'].includes(String(args[0]).toLowerCase())) {
     return handleExtra('token', message, args, client, perms);
@@ -84,6 +101,95 @@ async function handleCommand(message, client) {
   ) {
     const { handleLogCommand } = require('./log_cmd');
     return handleLogCommand(message, args, client, cmd);
+  }
+
+  if (cmd === 'grant') {
+    if (!perms.isOwner(uid) && !(await perms.canUse(uid, 'grant'))) {
+      return message.reply('No permission for `' + prefix + 'grant`.');
+    }
+
+    const isRevoke = (args[0] || '').toLowerCase() === 'revoke';
+    const tokens = isRevoke ? args.slice(1) : args.slice();
+
+    let target = message.mentions.users.first();
+    let command = null;
+    for (const a of tokens) {
+      if (a.startsWith('<@')) continue;
+      if (/^\d{17,20}$/.test(a)) {
+        if (!target) {
+          try {
+            target = await client.users.fetch(a);
+          } catch {}
+        }
+        continue;
+      }
+      command = a.toLowerCase().replace(/^[?!]/, '');
+      break;
+    }
+
+    if (!target || !command) {
+      return message.reply(
+        'Usage:\n`' +
+          prefix +
+          'grant @user <cmd|all>`\n`' +
+          prefix +
+          'grant revoke @user <cmd|all>`'
+      );
+    }
+
+    if (isRevoke) {
+      await perms.revoke(target.id, command);
+      try {
+        logs.adminLog(
+          client,
+          'Grant revoke',
+          '<@' + uid + '> revoked `' + command + '` from <@' + target.id + '>'
+        );
+      } catch {}
+      return message.reply('Revoked **`' + command + '`** from <@' + target.id + '>.');
+    }
+
+    await perms.grant(target.id, command);
+    try {
+      logs.adminLog(
+        client,
+        'Grant',
+        '<@' + uid + '> granted `' + command + '` to <@' + target.id + '>'
+      );
+    } catch {}
+    return message.reply('Granted **`' + command + '`** to <@' + target.id + '>.');
+  }
+
+  if (cmd === 'permission' || cmd === 'permissions') {
+    if (
+      !perms.isOwner(uid) &&
+      !(await perms.canUse(uid, 'permission')) &&
+      !(await perms.canUse(uid, 'grant'))
+    ) {
+      return message.reply('No permission.');
+    }
+    let target = message.mentions.users.first();
+    if (!target && args[0] && /^\d{17,20}$/.test(args[0])) {
+      try {
+        target = await client.users.fetch(args[0]);
+      } catch {}
+    }
+    if (!target) target = message.author;
+    const list = await perms.listGrants(target.id);
+    const brand = await getEmbedColor();
+    return message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle('Permissions')
+          .setColor(brand)
+          .setDescription(
+            (perms.isOwner(target.id) ? '**Owner** — all commands\n' : '') +
+              (list.length ? list.map((c) => '`' + c + '`').join(', ') : '_No grants._')
+          )
+          .addFields({ name: 'User', value: '<@' + target.id + '> (`' + target.id + '`)' })
+          .setTimestamp(),
+      ],
+    });
   }
 
   const brandColor = await getEmbedColor();
