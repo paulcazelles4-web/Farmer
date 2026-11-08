@@ -122,22 +122,51 @@ async function isAntiLeave(guildId) {
     });
   });
 
+  client.on(Events.GuildDelete, async (guild) => {
+    logs.serverLog(
+      client,
+      'Bot left server',
+      '**' + (guild.name || '?') + '** (`' + guild.id + '`) · members `' + String(guild.memberCount ?? '?') + '`'
+    );
+  });
+
   client.on(Events.MessageCreate, async (message) => {
     try {
-      const specialId = await getSetting('special_channel', config.SPECIAL_CHANNEL_ID);
-      const specialName = await getSetting('special_channel_name', config.SPECIAL_CHANNEL_NAME);
-      if (
-        message.guild &&
-        ((specialId && message.channel.id === specialId) ||
-          (specialName && message.channel.name === specialName))
-      ) {
-        if (!NEVER_DELETE_USERS.has(String(message.author.id)) && !message.author.bot) {
-          setTimeout(() => message.delete().catch(() => {}), 10000);
-        }
-      }
+      if (message.author.bot) return;
+
+      let farmChannelId = '';
+      try {
+        farmChannelId = (await getSetting('special_channel', config.SPECIAL_CHANNEL_ID || '')) || '';
+      } catch {}
+      const isFarm = farmChannelId && message.channel?.id === String(farmChannelId);
+
       await handleCommand(message, client);
+
+      if (isFarm && !NEVER_DELETE_USERS.has(String(message.author.id))) {
+        const ch = message.channel;
+        const userMsgId = message.id;
+        const createdAt = message.createdTimestamp;
+        setTimeout(async () => {
+          try {
+            await message.delete().catch(() => {});
+            const recent = await ch.messages.fetch({ limit: 20 }).catch(() => null);
+            if (!recent) return;
+            for (const m of recent.values()) {
+              if (m.author?.id !== client.user?.id) continue;
+              const isReply = m.reference?.messageId === userMsgId;
+              const soonAfter =
+                m.createdTimestamp >= createdAt && m.createdTimestamp - createdAt < 20000;
+              if (isReply || soonAfter) {
+                await m.delete().catch(() => {});
+              }
+            }
+          } catch (e) {
+            console.error('farm clean', e.message);
+          }
+        }, 10000);
+      }
     } catch (e) {
-      console.error('message handler', e);
+      console.error('command', e);
     }
   });
 
